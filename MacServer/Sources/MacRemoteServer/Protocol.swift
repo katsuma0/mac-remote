@@ -1,0 +1,22 @@
+import Foundation
+
+/// One message on the wire. Messages are JSON objects separated by newlines.
+/// Keep this file identical to iOS/MacRemote/Protocol.swift.
+///
+/// t (type):  auth | auth_ok | auth_fail | move | scroll | click | down | up |
+///            text | key | media | volume | system | ping | pong
+struct RemoteCommand: Codable {
+    var t: String
+    var dx: Double? = nil      // move / scroll delta
+    var dy: Double? = nil
+    var b: String? = nil       // mouse button: "left" | "right"
+    var s: String? = nil       // text, key name, media key, system action, or message
+    var m: [String]? = nil     // modifiers: cmd, shift, alt, ctrl
+    var v: Double? = nil       // value (volume 0-100)
+    var pin: String? = nil
+}
+
+enum RemoteConstants {
+    static let serviceType = "_macremote._tcp"
+    static let defaultPort: UInt16 = 51515
+}

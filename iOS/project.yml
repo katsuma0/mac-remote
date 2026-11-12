@@ -1,0 +1,24 @@
+# Backup only: if MacRemote.xcodeproj ever won't open, regenerate it with
+#   brew install xcodegen && cd iOS && xcodegen
+name: MacRemote
+options:
+  bundleIdPrefix: com.yourname
+  deploymentTarget:
+    iOS: "17.0"
+targets:
+  MacRemote:
+    type: application
+    platform: iOS
+    sources: [MacRemote]
+    info:
+      path: Info.plist
+      properties:
+        CFBundleDisplayName: Mac Remote
+        UILaunchScreen: {}
+        NSLocalNetworkUsageDescription: Mac Remote uses your local network to find and control your Mac.
+        NSBonjourServices: [_macremote._tcp]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.yourname.MacRemote
+        SWIFT_VERSION: "5.0"
+        TARGETED_DEVICE_FAMILY: "1,2"
