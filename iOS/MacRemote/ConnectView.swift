@@ -7,6 +7,7 @@ struct ConnectView: View {
     @State private var pinText = ""
     @State private var showPinPrompt = false
     @State private var manualHost = ""
+    @AppStorage("peerToPeer") private var peerToPeer = false
 
     var body: some View {
         NavigationStack {
@@ -36,7 +37,7 @@ struct ConnectView: View {
                 } header: {
                     Text("Macs nearby")
                 } footer: {
-                    Text("Start MacRemoteServer on your Mac first. Both devices should be on the same Wi-Fi, or just have Wi-Fi and Bluetooth turned on to connect directly.")
+                    Text("Start MacRemoteServer on your Mac first. Both devices should be on the same Wi-Fi.")
                 }
 
                 Section {
@@ -54,6 +55,13 @@ struct ConnectView: View {
                     Text("Or connect by IP address")
                 } footer: {
                     Text("Find your Mac's IP in System Settings → Wi-Fi → Details.")
+                }
+
+                Section {
+                    Toggle("Direct connection (no Wi-Fi network)", isOn: $peerToPeer)
+                        .onChange(of: peerToPeer) { _, _ in remote.startBrowsing() }
+                } footer: {
+                    Text("Connects AirDrop-style when your iPhone and Mac aren't on the same Wi-Fi. Start the Mac side with --p2p too. Leave this off at home: it can make the mouse lag.")
                 }
 
                 if let problem = remote.browseProblem {

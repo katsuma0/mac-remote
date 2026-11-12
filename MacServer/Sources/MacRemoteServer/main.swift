@@ -38,6 +38,8 @@ if args.contains("--help") || args.contains("-h") {
       --show-pin        Print the PIN and exit
       --reset-pin       Generate a new random PIN (phones will need the new one)
       --set-pin <pin>   Use your own PIN
+      --p2p             Also allow direct Wi-Fi (AirDrop-style) connections when the
+                        iPhone isn't on the same network. Can add some mouse lag.
     """)
     exit(0)
 }
@@ -68,15 +70,16 @@ if !AXIsProcessTrustedWithOptions([promptKey: true] as CFDictionary) {
 
 // MARK: Start
 
-let server = RemoteServer(pin: pin)
+let server = RemoteServer(pin: pin, peerToPeer: args.contains("--p2p"))
 server.start()
+server.startUDP()
 
 print("""
 
 🖥  Mac Remote server for “\(server.computerName)”
 🔑 PIN: \(pin)
 
-Open Mac Remote on your iPhone, pick this Mac, and enter the PIN.
+Open Mac Remote on your iPhone, pick this Mac, and enter the PIN.\(server.peerToPeer ? "\nDirect (peer-to-peer) connections are ON." : "")
 Press Ctrl+C to stop.
 
 """)
