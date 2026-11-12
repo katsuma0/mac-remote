@@ -40,7 +40,14 @@ final class RemoteConnection: ObservableObject {
     private var receiveBuffer = Data()
     private var retryWork: DispatchWorkItem?
 
-    // Mouse movement is coalesced: while a packet is in flight, deltas pile up and are sent together.
+    // Fast mouse channel: movement goes over UDP so one lost Wi-Fi packet never stalls the pointer.
+    private var udp: NWConnection?
+    private var udpConfirmed = false
+    private var udpToken: String?
+    private var udpSequence = 0
+    private var udpHelloAttempts = 0
+
+    // TCP fallback: while a packet is in flight, deltas pile up and are sent together.
     private var inFlight = 0
     private var pendingMove = (dx: 0.0, dy: 0.0)
     private var pendingScroll = (dx: 0.0, dy: 0.0)
@@ -89,6 +96,10 @@ final class RemoteConnection: ObservableObject {
 
     // MARK: Discovery
 
+    /// Peer-to-peer Wi-Fi (AWDL) allows connecting without a shared network, but makes the radio
+    /// hop channels which adds lag, so it's off unless turned on in the app.
+    static var peerToPeer: Bool { UserDefaults.standard.bool(forKey: "peerToPeer") }
+
     static func parameters() -> NWParameters {
         let tcp = NWProtocolTCP.Options()
         tcp.noDelay = true
@@ -98,14 +109,14 @@ final class RemoteConnection: ObservableObject {
         tcp.keepaliveCount = 3
         tcp.connectionTimeout = 8
         let params = NWParameters(tls: nil, tcp: tcp)
-        params.includePeerToPeer = true   // direct Wi-Fi link (AWDL) when not on the same network
+        params.includePeerToPeer = peerToPeer
         return params
     }
 
     func startBrowsing() {
         browser?.cancel()
         let params = NWParameters()
-        params.includePeerToPeer = true
+        params.includePeerToPeer = Self.peerToPeer
         let newBrowser = NWBrowser(for: .bonjour(type: RemoteConstants.serviceType, domain: nil), using: params)
         newBrowser.browseResultsChangedHandler = { [weak self] results, _ in
             guard let self else { return }
@@ -201,6 +212,11 @@ final class RemoteConnection: ObservableObject {
             connection.cancel()
         }
         connection = nil
+        udp?.stateUpdateHandler = nil
+        udp?.cancel()
+        udp = nil
+        udpConfirmed = false
+        udpToken = nil
         authenticated = false
         inFlight = 0
         pendingMove = (0, 0)
@@ -277,6 +293,7 @@ final class RemoteConnection: ObservableObject {
             state = .connected(t.name)
             lastMacName = t.name
             setSavedPin(t.pin, for: t.name)
+            if let token = msg.k, let port = msg.p { openUDP(token: token, port: port) }
         case "auth_fail":
             setSavedPin(nil, for: t.name)
             userWantsConnection = false
@@ -294,6 +311,10 @@ final class RemoteConnection: ObservableObject {
 
     func move(dx: Double, dy: Double) {
         guard authenticated else { return }
+        if udpConfirmed {
+            sendDatagram(RemoteCommand(t: "move", dx: dx, dy: dy))
+            return
+        }
         pendingMove.dx += dx
         pendingMove.dy += dy
         flushIfIdle()
@@ -301,9 +322,75 @@ final class RemoteConnection: ObservableObject {
 
     func scroll(dx: Double, dy: Double) {
         guard authenticated else { return }
+        if udpConfirmed {
+            sendDatagram(RemoteCommand(t: "scroll", dx: dx, dy: dy))
+            return
+        }
         pendingScroll.dx += dx
         pendingScroll.dy += dy
         flushIfIdle()
+    }
+
+    // MARK: UDP fast channel
+
+    private func openUDP(token: String, port: Int) {
+        // Send UDP to the exact address the TCP connection resolved to (Bonjour names resolve to an IP).
+        guard let path = connection?.currentPath,
+              case let .hostPort(host, _)? = path.remoteEndpoint,
+              let udpPort = NWEndpoint.Port(rawValue: UInt16(clamping: port)) else { return }
+        let params = NWParameters.udp
+        params.includePeerToPeer = Self.peerToPeer
+        let conn = NWConnection(host: host, port: udpPort, using: params)
+        udp = conn
+        udpToken = token
+        udpSequence = 0
+        udpConfirmed = false
+        udpHelloAttempts = 0
+        conn.stateUpdateHandler = { [weak self, weak conn] state in
+            guard let self, let conn, conn === self.udp else { return }
+            switch state {
+            case .ready:
+                self.receiveUDP(on: conn)
+                self.sendHello()
+            case .failed, .cancelled:
+                self.udpConfirmed = false   // fall back to TCP
+            default:
+                break
+            }
+        }
+        conn.start(queue: .main)
+    }
+
+    /// Confirm datagrams actually reach the Mac (and come back) before switching movement to UDP.
+    private func sendHello() {
+        guard let conn = udp, !udpConfirmed, udpHelloAttempts < 10 else { return }
+        udpHelloAttempts += 1
+        sendDatagram(RemoteCommand(t: "hello"), on: conn)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in self?.sendHello() }
+    }
+
+    private func receiveUDP(on conn: NWConnection) {
+        conn.receiveMessage { [weak self, weak conn] data, _, _, error in
+            guard let self, let conn, conn === self.udp else { return }
+            if let data, let msg = try? JSONDecoder().decode(RemoteCommand.self, from: data), msg.t == "hello_ok" {
+                if !self.udpConfirmed {
+                    // Anything still queued for TCP goes first so nothing is reordered.
+                    self.flushIfIdle()
+                    self.udpConfirmed = true
+                }
+            }
+            if error == nil { self.receiveUDP(on: conn) }
+        }
+    }
+
+    private func sendDatagram(_ cmd: RemoteCommand, on conn: NWConnection? = nil) {
+        guard let conn = conn ?? udp else { return }
+        var packet = cmd
+        packet.k = udpToken
+        udpSequence += 1
+        packet.q = udpSequence
+        guard let data = try? JSONEncoder().encode(packet) else { return }
+        conn.send(content: data, completion: .idempotent)
     }
 
     func click(right: Bool = false) { send(RemoteCommand(t: "click", b: right ? "right" : "left")) }

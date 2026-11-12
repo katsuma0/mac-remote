@@ -18,13 +18,32 @@ final class InputController {
     // Sub-pixel scroll amounts that haven't been sent yet.
     private var scrollRemainder = CGPoint.zero
 
-    private var cursor: CGPoint { CGEvent(source: nil)?.location ?? .zero }
+    // While the phone is streaming movement we track the pointer ourselves: asking macOS for the
+    // cursor position right after posting an event returns a slightly stale value, which loses
+    // movement and makes the pointer feel sluggish. After a short pause we re-sync with the real
+    // position, so using the Mac's own trackpad in between still works.
+    private var virtualCursor: CGPoint?
+    private var lastMoveTime: TimeInterval = 0
+    private let resyncAfter: TimeInterval = 0.25
+
+    private var cursor: CGPoint {
+        if let virtualCursor, ProcessInfo.processInfo.systemUptime - lastMoveTime < resyncAfter {
+            return virtualCursor
+        }
+        return CGEvent(source: nil)?.location ?? .zero
+    }
+
+    // Display bounds are cached briefly instead of being queried for every movement.
+    private var displayRects: [CGRect] = []
+    private var displayRectsTime: TimeInterval = -1
 
     // MARK: Mouse
 
     func move(dx: Double, dy: Double) {
         let current = cursor
         let target = clampToDisplays(CGPoint(x: current.x + dx, y: current.y + dy))
+        virtualCursor = target
+        lastMoveTime = ProcessInfo.processInfo.systemUptime
         let type: CGEventType
         let button: CGMouseButton
         if leftDown {
@@ -102,13 +121,21 @@ final class InputController {
         e.post(tap: .cghidEventTap)
     }
 
-    private func clampToDisplays(_ p: CGPoint) -> CGPoint {
+    private func currentDisplayRects() -> [CGRect] {
+        let now = ProcessInfo.processInfo.systemUptime
+        if now - displayRectsTime < 2, !displayRects.isEmpty { return displayRects }
         var count: UInt32 = 0
         CGGetActiveDisplayList(0, nil, &count)
-        guard count > 0 else { return p }
         var ids = [CGDirectDisplayID](repeating: 0, count: Int(count))
-        CGGetActiveDisplayList(count, &ids, &count)
-        let rects = ids.prefix(Int(count)).map { CGDisplayBounds($0) }
+        if count > 0 { CGGetActiveDisplayList(count, &ids, &count) }
+        displayRects = ids.prefix(Int(count)).map { CGDisplayBounds($0) }
+        displayRectsTime = now
+        return displayRects
+    }
+
+    private func clampToDisplays(_ p: CGPoint) -> CGPoint {
+        let rects = currentDisplayRects()
+        guard !rects.isEmpty else { return p }
         if rects.contains(where: { $0.contains(p) }) { return p }
 
         var best = p

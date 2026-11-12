@@ -4,7 +4,10 @@ import Foundation
 /// Keep this file identical to iOS/MacRemote/Protocol.swift.
 ///
 /// t (type):  auth | auth_ok | auth_fail | move | scroll | click | down | up |
-///            text | key | media | volume | system | ping | pong
+///            text | key | media | volume | system | ping | pong | hello | hello_ok
+///
+/// Mouse movement and scrolling go over UDP (port `p` from auth_ok) so a lost Wi-Fi packet
+/// never stalls the pointer; everything else goes over the TCP connection.
 struct RemoteCommand: Codable {
     var t: String
     var dx: Double? = nil      // move / scroll delta
@@ -14,6 +17,9 @@ struct RemoteCommand: Codable {
     var m: [String]? = nil     // modifiers: cmd, shift, alt, ctrl
     var v: Double? = nil       // value (volume 0-100)
     var pin: String? = nil
+    var k: String? = nil       // session token (UDP packets must carry it)
+    var p: Int? = nil          // UDP port, sent in auth_ok
+    var q: Int? = nil          // UDP sequence number
 }
 
 enum RemoteConstants {

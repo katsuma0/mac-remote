@@ -11,18 +11,25 @@ final class RemoteServer {
     let computerName: String = (SCDynamicStoreCopyComputerName(nil, nil) as String?)
         ?? Host.current().localizedName ?? "Mac"
 
+    /// Peer-to-peer Wi-Fi (AWDL, what AirDrop uses) lets the phone connect with no shared network,
+    /// but it makes the Wi-Fi radio hop channels and adds latency spikes, so it is opt-in (--p2p).
+    let peerToPeer: Bool
+
     private var listener: NWListener?
+    private var udpListener: NWListener?
+    private var udpFlows: [ObjectIdentifier: NWConnection] = [:]
     private var sessions: [ObjectIdentifier: ClientSession] = [:]
 
     // Brute-force protection for the PIN.
     private var failedAttempts = 0
     private var lockedUntil = Date.distantPast
 
-    init(pin: String) {
+    init(pin: String, peerToPeer: Bool) {
         self.pin = pin
+        self.peerToPeer = peerToPeer
     }
 
-    static func parameters() -> NWParameters {
+    func parameters() -> NWParameters {
         let tcp = NWProtocolTCP.Options()
         tcp.noDelay = true
         tcp.enableKeepalive = true
@@ -30,18 +37,116 @@ final class RemoteServer {
         tcp.keepaliveInterval = 2
         tcp.keepaliveCount = 3
         let params = NWParameters(tls: nil, tcp: tcp)
-        params.includePeerToPeer = true   // allows a direct Wi-Fi link (like AirDrop) with no router
+        params.includePeerToPeer = peerToPeer
         params.allowLocalEndpointReuse = true
         return params
+    }
+
+    func udpParameters() -> NWParameters {
+        let params = NWParameters.udp
+        params.includePeerToPeer = peerToPeer
+        params.allowLocalEndpointReuse = true
+        return params
+    }
+
+    var udpPort: UInt16? { udpListener?.port?.rawValue }
+
+    // MARK: UDP (mouse movement)
+
+    /// Mouse movement uses UDP: a lost packet is simply skipped instead of stalling everything
+    /// behind it until TCP retransmits it (which feels like 200 ms+ of lag on Wi-Fi).
+    func startUDP(port: UInt16? = RemoteConstants.defaultPort) {
+        let newListener: NWListener
+        do {
+            if let port, let nwPort = NWEndpoint.Port(rawValue: port) {
+                newListener = try NWListener(using: udpParameters(), on: nwPort)
+            } else {
+                newListener = try NWListener(using: udpParameters())
+            }
+        } catch {
+            print("⚠️  UDP unavailable (\(error)); mouse movement will use TCP.")
+            return
+        }
+        newListener.stateUpdateHandler = { [weak self, weak newListener] state in
+            guard let self, let newListener, newListener === self.udpListener else { return }
+            switch state {
+            case .ready:
+                print("✅ Fast mouse channel (UDP) on port \(newListener.port?.rawValue ?? 0)")
+            case .failed(let error):
+                newListener.cancel()
+                self.udpListener = nil
+                if case .posix(let code) = error, code == .EADDRINUSE, port != nil {
+                    self.startUDP(port: nil)
+                } else {
+                    print("⚠️  UDP listener failed (\(error)); retrying.")
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in self?.startUDP(port: port) }
+                }
+            default:
+                break
+            }
+        }
+        newListener.newConnectionHandler = { [weak self] flow in
+            guard let self else { flow.cancel(); return }
+            self.udpFlows[ObjectIdentifier(flow)] = flow
+            flow.stateUpdateHandler = { [weak self, weak flow] state in
+                guard let flow else { return }
+                switch state {
+                case .failed, .cancelled:
+                    self?.udpFlows[ObjectIdentifier(flow)] = nil
+                default:
+                    break
+                }
+            }
+            flow.start(queue: .main)
+            self.receiveUDP(on: flow)
+        }
+        udpListener = newListener
+        newListener.start(queue: .main)
+    }
+
+    private func receiveUDP(on flow: NWConnection) {
+        flow.receiveMessage { [weak self, weak flow] data, _, _, error in
+            guard let self, let flow else { return }
+            if let data, !data.isEmpty { self.handleDatagram(data, from: flow) }
+            if error == nil {
+                self.receiveUDP(on: flow)
+            } else {
+                flow.cancel()
+            }
+        }
+    }
+
+    private func handleDatagram(_ data: Data, from flow: NWConnection) {
+        guard let cmd = try? JSONDecoder().decode(RemoteCommand.self, from: data),
+              let token = cmd.k,
+              let session = sessions.values.first(where: { $0.authenticated && $0.token == token })
+        else { return }   // unknown or unauthenticated sender: ignore
+
+        switch cmd.t {
+        case "hello":
+            // Lets the phone confirm UDP actually gets through (firewalls) before relying on it.
+            if let reply = try? JSONEncoder().encode(RemoteCommand(t: "hello_ok")) {
+                flow.send(content: reply, completion: .idempotent)
+            }
+        case "move", "scroll":
+            // Drop packets that arrive after a newer one (Wi-Fi can reorder); deltas are small.
+            if let q = cmd.q {
+                if q <= session.lastUDPSequence && session.lastUDPSequence - q < 1_000_000 { return }
+                session.lastUDPSequence = q
+            }
+            perform(cmd, from: session)
+        default:
+            break
+        }
     }
 
     func start(port: UInt16? = RemoteConstants.defaultPort) {
         let newListener: NWListener
         do {
             if let port, let nwPort = NWEndpoint.Port(rawValue: port) {
-                newListener = try NWListener(using: Self.parameters(), on: nwPort)
+                newListener = try NWListener(using: parameters(), on: nwPort)
             } else {
-                newListener = try NWListener(using: Self.parameters())
+                newListener = try NWListener(using: parameters())
             }
         } catch {
             print("❌ Could not create listener: \(error)")
@@ -100,6 +205,8 @@ final class RemoteServer {
         sessions[ObjectIdentifier(session)] = nil
         if !sessions.values.contains(where: { $0.authenticated }) {
             input.releaseAll()
+            udpFlows.values.forEach { $0.cancel() }
+            udpFlows.removeAll()
         }
     }
 
@@ -168,6 +275,8 @@ final class RemoteServer {
         let connection: NWConnection
         weak var server: RemoteServer?
         private(set) var authenticated = false
+        let token = UUID().uuidString
+        var lastUDPSequence = -1
         private var buffer = Data()
         private var closed = false
 
@@ -227,7 +336,9 @@ final class RemoteServer {
                 case .ok:
                     authenticated = true
                     print("📱 Phone connected (\(peer))")
-                    send(RemoteCommand(t: "auth_ok", s: server.computerName))
+                    var ok = RemoteCommand(t: "auth_ok", s: server.computerName, k: token)
+                    if let udpPort = server.udpPort { ok.p = Int(udpPort) }
+                    send(ok)
                     server.sendVolume(to: self)
                 case .wrong:
                     print("⚠️  Wrong PIN from \(peer)")
