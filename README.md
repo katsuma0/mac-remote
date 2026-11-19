@@ -96,7 +96,7 @@ Everything is on one screen:
   - Touch and hold, then move: drag (or hold **Left** and move with another finger)
 - **Bottom row:** **Left**, **Double** (double-click), **Right**, and ⌨️ **keyboard**. The keyboard sends what you type straight to the Mac. While it's open, the media controls hide to make room, and a row of extra keys appears (esc, tab, arrows, ⌘C/⌘V/⌘Z, Spotlight…). **More** in that row opens the full key page: paste and send longer text, ⌘⌥⌃⇧ modifiers, page up/down, and shortcuts such as Mission Control, app switcher, zoom and Lock Screen.
 
-**Screen Mirroring** lists the TVs and Apple TVs your Mac can mirror to. Tap one to start, or tap the one marked Mirroring to stop. It works by operating the Screen Mirroring menu in your Mac's Control Center. The first time, your Mac asks whether Terminal (or MacRemoteServer) may control **System Events**: click **OK**. If you clicked Don't Allow, turn it on under System Settings → Privacy & Security → Automation.
+**Screen Mirroring** lists the TVs and Apple TVs your Mac can mirror to. Tap one to start, or tap the one marked Mirroring to stop. It works by pressing the Screen Mirroring menu in your Mac's menu bar for you, using the same Accessibility permission as the mouse. Keep its icon in the menu bar: System Settings → Control Center → Screen Mirroring → **Always Show in Menu Bar**. If it stops working after a macOS update, run `swift run -c release MacRemoteServer --dump-menubar Mirroring` and send the output to whoever maintains this.
 
 **Settings:** pointer speed, scroll speed, reverse scrolling, haptics, disconnect.
 
@@ -105,7 +105,7 @@ Everything is on one screen:
 - **The Mac doesn't show up in the app:** make sure MacRemoteServer is running and both devices are on the same Wi-Fi. Check iPhone Settings → Privacy & Security → **Local Network** → Mac Remote is on. On a Mac with the firewall on, allow incoming connections for the server. As a fallback, connect by IP.
 - **It connects, but nothing moves:** this is Accessibility permission. Turn it on (see step 1) and restart the server.
 - **Brightness slider is greyed out:** your Mac's display doesn't allow setting brightness this way. This is normal for external monitors.
-- **Screen Mirroring shows an error:** make sure the TV is on and on the same Wi-Fi, and that System Events is allowed under Privacy & Security → Automation. Apple sometimes changes Control Center's layout in new macOS versions. If it says it couldn't find Screen Mirroring, send me the message.
+- **Screen Mirroring shows an error:** make sure the TV is on and on the same Wi-Fi, and that the Screen Mirroring icon is shown in the Mac's menu bar. Apple sometimes changes the menu bar in new macOS versions; the `--dump-menubar Mirroring` option prints what the server can see.
 - **"Wrong PIN":** run `--show-pin` on the Mac. After 5 wrong tries the server locks for a minute.
 
 ## Security notes
@@ -124,7 +124,8 @@ MacServer/                      Swift package for the Mac
     InputController.swift       mouse / keyboard / media-key events (CGEvent)
     SystemActions.swift         volume (osascript), display sleep (pmset)
     Brightness.swift            built-in display brightness (DisplayServices)
-    Mirroring.swift             AirPlay screen mirroring via Control Center (AppleScript)
+    Mirroring.swift             AirPlay screen mirroring via the menu bar (Accessibility API)
+    MenuBarInspector.swift      --dump-menubar diagnostic
     Protocol.swift              wire format (same file as the iOS one)
   install-agent.sh / uninstall-agent.sh
 iOS/

@@ -1,12 +1,17 @@
-import Foundation
+import AppKit
+import ApplicationServices
 
-/// AirPlay screen mirroring, driven through the Screen Mirroring menu in Control Center.
+/// AirPlay screen mirroring, driven through the Screen Mirroring menu in the menu bar.
 ///
-/// macOS has no API for starting AirPlay mirroring, so this uses AppleScript GUI scripting
-/// (System Events), exactly as if you clicked the menu yourself. It needs Accessibility permission
-/// (already required) and, the first time, macOS asks to allow controlling "System Events".
-/// It relies on Control Center's layout, which Apple sometimes changes between macOS versions;
-/// errors are passed back to the phone.
+/// macOS has no API for starting AirPlay mirroring, so this presses the same buttons you would,
+/// using the Accessibility API (the permission the server already has for mouse and keyboard).
+///
+/// What it relies on (seen on macOS 26/27):
+/// - The menu bar icons live in a process called MenuBarAgent, under AXExtrasMenuBar; the Screen
+///   Mirroring icon has the identifier `com.apple.menuextra.screen-mirroring`.
+/// - Pressing it opens a Control Center panel whose screens are AXCheckBox toggles with identifiers
+///   starting `screen-mirroring-device-`, the screen's name as description, and value 1 when mirroring.
+/// Older layouts (icon hosted by ControlCenter, or only reachable through Control Center) are tried too.
 enum Mirroring {
     struct Screen {
         let name: String
@@ -17,242 +22,225 @@ enum Mirroring {
         case list, connect, stop, open
     }
 
-    private static var busy = false
-    private static var queued: [(Action, String?, (Result<[Screen], MirroringError>) -> Void)] = []
-
     struct MirroringError: Error {
         let message: String
     }
 
-    /// Runs one action at a time (scripts drive the same menu, so they must not overlap).
+    /// Serial: actions drive the same menu, so they must not overlap. Accessibility calls block,
+    /// so they run off the main queue.
+    private static let queue = DispatchQueue(label: "mirroring", qos: .userInitiated)
+
+    private static let processNames = ["MenuBarAgent", "ControlCenter", "SystemUIServer"]
+    private static var cachedApplications: [AXUIElement] = []
+
+    /// Runs the action and calls back on the main queue.
     static func perform(_ action: Action, name: String? = nil,
                         completion: @escaping (Result<[Screen], MirroringError>) -> Void) {
-        queued.append((action, name, completion))
-        runNext()
-    }
-
-    private static func runNext() {
-        guard !busy, !queued.isEmpty else { return }
-        let (action, name, completion) = queued.removeFirst()
-        busy = true
-        SystemActions.run("/usr/bin/osascript", ["-e", script, action.rawValue, name ?? ""]) { result in
-            busy = false
-            if result.status == 0 {
-                completion(.success(parse(result.output)))
-            } else {
-                print("🖥  Screen Mirroring script error: \(result.error)")
-                completion(.failure(MirroringError(message: friendly(result.error))))
+        queue.async {
+            let result: Result<[Screen], MirroringError>
+            do {
+                result = .success(try run(action, name: name))
+            } catch let error as MirroringError {
+                result = .failure(error)
+            } catch {
+                result = .failure(MirroringError(message: "\(error)"))
             }
-            runNext()
+            DispatchQueue.main.async { completion(result) }
         }
     }
 
-    /// Output lines are "name<TAB>1" (mirroring to it) or "name<TAB>0".
-    private static func parse(_ output: String) -> [Screen] {
+    // MARK: - Steps
+
+    private static func run(_ action: Action, name: String?) throws -> [Screen] {
+        guard AXIsProcessTrusted() else {
+            throw MirroringError(message: "Accessibility permission is missing for Terminal or MacRemoteServer (System Settings → Privacy & Security → Accessibility).")
+        }
+
+        cachedApplications = processNames.compactMap { MenuBarInspector.pid(of: $0) }
+            .map { AXUIElementCreateApplication($0) }
+
+        var openedVia: AXUIElement?   // the menu bar icon we pressed, used to close the panel again
+        if !panelIsOpen() {
+            openedVia = try openPanel()
+        }
+        if action == .open { return [] }   // leave it open on the Mac's screen
+
+        defer { closePanel(using: openedVia) }
+
+        var toggles = try waitForToggles()
+        switch action {
+        case .list, .open:
+            break
+
+        case .connect:
+            guard let name, let toggle = toggles.first(where: { label($0) == name }) else {
+                throw MirroringError(message: "Couldn't find “\(name ?? "")” in Screen Mirroring. Make sure the TV is on and on the same Wi-Fi, then refresh.")
+            }
+            AXUIElementPerformAction(toggle, kAXPressAction as CFString)
+            Thread.sleep(forTimeInterval: 2)
+            let after = deviceToggles()
+            if after.isEmpty {
+                // The panel closed by itself after choosing; report what we just did.
+                return toggles.map { Screen(name: label($0), connected: label($0) == name) }
+            }
+            toggles = after
+
+        case .stop:
+            guard let toggle = toggles.first(where: isOn) else {
+                throw MirroringError(message: "Your Mac isn't mirroring to anything right now.")
+            }
+            AXUIElementPerformAction(toggle, kAXPressAction as CFString)
+            Thread.sleep(forTimeInterval: 1)
+            let after = deviceToggles()
+            if after.isEmpty {
+                return toggles.map { Screen(name: label($0), connected: false) }
+            }
+            toggles = after
+        }
+
         var seen = Set<String>()
-        return output.split(separator: "\n").compactMap { line in
-            let parts = line.split(separator: "\t", omittingEmptySubsequences: false)
-            guard let first = parts.first else { return nil }
-            let name = String(first).trimmingCharacters(in: .whitespaces)
+        return toggles.compactMap { toggle in
+            let name = label(toggle)
             guard !name.isEmpty, seen.insert(name).inserted else { return nil }
-            return Screen(name: name, connected: parts.count > 1 && parts[1] == "1")
+            return Screen(name: name, connected: isOn(toggle))
         }
     }
 
-    private static func friendly(_ error: String) -> String {
-        if error.contains("-1743") || error.localizedCaseInsensitiveContains("not allowed to send") {
-            return "Your Mac blocked controlling System Events. Allow it in System Settings → Privacy & Security → Automation (turn on System Events for Terminal or MacRemoteServer), then try again."
+    /// Presses the Screen Mirroring icon (or goes through Control Center). Returns the icon pressed.
+    private static func openPanel() throws -> AXUIElement? {
+        if let icon = menuExtra(where: { id, desc in
+            id.contains("screen-mirroring") || id.contains("screenmirroring") || desc.contains("Mirroring")
+        }) {
+            AXUIElementPerformAction(icon, kAXPressAction as CFString)
+            return icon
         }
-        // -1719 also means "invalid index" (an item wasn't found), so only blame permissions when the
-        // message actually says so.
-        if error.contains("-25211") || error.localizedCaseInsensitiveContains("assistive access") {
-            return "Accessibility permission is missing for Terminal or MacRemoteServer (System Settings → Privacy & Security → Accessibility)."
+
+        // No icon in the menu bar: open Control Center and press its Screen Mirroring tile.
+        if let controlCenter = menuExtra(where: { id, _ in id.contains("controlcenter") }) {
+            AXUIElementPerformAction(controlCenter, kAXPressAction as CFString)
+            Thread.sleep(forTimeInterval: 0.8)
+            if let tile = findInWindows(where: { element in
+                let role = MenuBarInspector.string(element, kAXRoleAttribute)
+                guard role == kAXCheckBoxRole || role == kAXButtonRole else { return false }
+                return label(element).contains("Mirroring")
+            }) {
+                AXUIElementPerformAction(tile, kAXPressAction as CFString)
+                return controlCenter
+            }
+            AXUIElementPerformAction(controlCenter, kAXPressAction as CFString)   // close it again
         }
-        // osascript errors look like "123:456: execution error: <message> (-2700)"
-        if let range = error.range(of: "execution error: ") {
-            return String(error[range.upperBound...])
-        }
-        return error.isEmpty ? "Screen Mirroring didn't respond." : error
+
+        throw MirroringError(message: "Couldn't find Screen Mirroring in the menu bar. On the Mac, turn it on in System Settings → Control Center → Screen Mirroring → Always Show in Menu Bar.")
     }
 
-    // MARK: - AppleScript
+    /// AirPlay screens take a moment to appear; wait until the list stops growing.
+    private static func waitForToggles() throws -> [AXUIElement] {
+        var toggles: [AXUIElement] = []
+        var stableRounds = 0
+        for _ in 0..<20 {   // up to ~5 seconds
+            Thread.sleep(forTimeInterval: 0.25)
+            let current = deviceToggles()
+            if !current.isEmpty && current.count == toggles.count {
+                stableRounds += 1
+                if stableRounds >= 2 { return current }
+            } else {
+                stableRounds = 0
+            }
+            toggles = current
+        }
+        if toggles.isEmpty && !panelIsOpen() {
+            throw MirroringError(message: "The Screen Mirroring menu didn't open on the Mac.")
+        }
+        return toggles   // may be empty: panel is open but no screens were found
+    }
 
-    private static let script = #"""
-    on run argv
-        set requestedAction to item 1 of argv
-        set targetName to ""
-        if (count of argv) > 1 then set targetName to item 2 of argv
+    private static func closePanel(using icon: AXUIElement?) {
+        guard panelIsOpen() else { return }
+        if let icon {
+            // Pressing the icon again toggles the panel closed, without sending a key to other apps.
+            AXUIElementPerformAction(icon, kAXPressAction as CFString)
+        } else {
+            for down in [true, false] {
+                CGEvent(keyboardEventSource: nil, virtualKey: 53, keyDown: down)?.post(tap: .cghidEventTap)
+            }
+        }
+    }
 
-        my openPanel()
-        if requestedAction is "open" then return ""
+    // MARK: - Finding things
 
-        set screenList to my waitForScreens()
+    /// Screen toggles in the open Screen Mirroring panel.
+    private static func deviceToggles() -> [AXUIElement] {
+        var result: [AXUIElement] = []
+        forEachWindowElement { element in
+            guard MenuBarInspector.string(element, kAXRoleAttribute) == kAXCheckBoxRole else { return }
+            if MenuBarInspector.string(element, kAXIdentifierAttribute).hasPrefix("screen-mirroring-device") {
+                result.append(element)
+            }
+        }
+        return result
+    }
 
-        if requestedAction is "connect" then
-            my clickScreen(targetName, false)
-            delay 2
-            set screenList to my readScreens()
-        else if requestedAction is "stop" then
-            my clickScreen("", true)
-            delay 1
-            set screenList to my readScreens()
-        end if
+    private static func panelIsOpen() -> Bool {
+        findInWindows(where: { element in
+            let id = MenuBarInspector.string(element, kAXIdentifierAttribute)
+            return id == "screen-mirroring-header" || id == "screen-mirroring-device-list"
+                || id.hasPrefix("screen-mirroring-device")
+        }) != nil
+    }
 
-        my closePanel()
-        return my formatScreens(screenList)
-    end run
+    private static func menuExtra(where matches: (_ identifier: String, _ description: String) -> Bool) -> AXUIElement? {
+        for app in applications() {
+            guard let bar = MenuBarInspector.copy(app, kAXExtrasMenuBarAttribute).0 else { continue }
+            var queue = MenuBarInspector.elements(from: bar)
+            var visited = 0
+            while !queue.isEmpty && visited < 300 {
+                let element = queue.removeFirst()
+                visited += 1
+                if MenuBarInspector.string(element, kAXRoleAttribute) == kAXMenuBarItemRole {
+                    let id = MenuBarInspector.string(element, kAXIdentifierAttribute)
+                    let desc = MenuBarInspector.string(element, kAXDescriptionAttribute)
+                        + " " + MenuBarInspector.string(element, kAXTitleAttribute)
+                    if matches(id, desc) { return element }
+                }
+                queue.append(contentsOf: MenuBarInspector.children(element))
+            }
+        }
+        return nil
+    }
 
-    -- Returns the menu bar item of Control Center whose identifier or description matches.
-    on menuBarItemMatching(identifierPart, descriptionPart)
-        tell application "System Events" to tell process "ControlCenter"
-            repeat with mbi in menu bar items of menu bar 1
-                set ident to ""
-                try
-                    set ident to (value of attribute "AXIdentifier" of mbi) as text
-                end try
-                set desc to ""
-                try
-                    set desc to (description of mbi) as text
-                end try
-                if ident contains identifierPart or desc contains descriptionPart then return mbi
-            end repeat
-        end tell
-        return missing value
-    end menuBarItemMatching
-
-    on openPanel()
-        -- 1) The Screen Mirroring icon in the menu bar, if it's shown there.
-        set mirroringItem to my menuBarItemMatching("screenmirroring", "Screen Mirroring")
-        if mirroringItem is not missing value then
-            tell application "System Events" to click mirroringItem
-            delay 0.8
-            return
-        end if
-
-        -- 2) Otherwise open Control Center and press its Screen Mirroring tile.
-        set ccItem to my menuBarItemMatching("controlcenter", "Control Center")
-        if ccItem is missing value then error "Couldn't find Control Center in the menu bar."
-        tell application "System Events"
-            click ccItem
-            delay 0.8
-            tell process "ControlCenter"
-                set tile to missing value
-                repeat with el in (entire contents of window 1)
-                    try
-                        set r to role of el
-                        if r is "AXCheckBox" or r is "AXButton" then
-                            set itemLabel to ""
-                            try
-                                set itemLabel to (description of el) as text
-                            end try
-                            if itemLabel does not contain "Mirroring" then
-                                try
-                                    set itemLabel to (name of el) as text
-                                end try
-                            end if
-                            if itemLabel contains "Mirroring" then
-                                set tile to el
-                                exit repeat
-                            end if
-                        end if
-                    end try
-                end repeat
-                if tile is missing value then
-                    key code 53
-                    error "Couldn't find Screen Mirroring in Control Center."
-                end if
-                click tile
-            end tell
-        end tell
-        delay 0.8
-    end openPanel
-
-    on closePanel()
-        tell application "System Events" to key code 53 -- Escape
-    end closePanel
-
-    -- Each screen in the panel is a checkbox: {name, isChecked}.
-    on readScreens()
-        set found to {}
-        tell application "System Events" to tell process "ControlCenter"
-            try
-                repeat with el in (entire contents of window 1)
-                    try
-                        if (role of el) is "AXCheckBox" then
-                            set itemLabel to ""
-                            try
-                                set itemLabel to (name of el) as text
-                            end try
-                            if itemLabel is "" or itemLabel is "missing value" then
-                                try
-                                    set itemLabel to (description of el) as text
-                                end try
-                            end if
-                            set isChecked to 0
-                            try
-                                set isChecked to (value of el) as integer
-                            end try
-                            if itemLabel is not "" and itemLabel is not "missing value" and itemLabel does not contain "Mirroring" then
-                                set end of found to {itemLabel, isChecked}
-                            end if
-                        end if
-                    end try
-                end repeat
-            end try
-        end tell
+    private static func findInWindows(where matches: (AXUIElement) -> Bool) -> AXUIElement? {
+        var found: AXUIElement?
+        forEachWindowElement { element in
+            if found == nil && matches(element) { found = element }
+        }
         return found
-    end readScreens
+    }
 
-    -- AirPlay devices take a moment to show up after the panel opens.
-    on waitForScreens()
-        repeat 10 times
-            set screenList to my readScreens()
-            if (count of screenList) > 0 then return screenList
-            delay 0.4
-        end repeat
-        return {}
-    end waitForScreens
+    /// Visits every element in the windows of the menu bar processes (the panel is one of them).
+    private static func forEachWindowElement(_ visit: (AXUIElement) -> Void) {
+        for app in applications() {
+            guard let windows = MenuBarInspector.copy(app, kAXWindowsAttribute).0 else { continue }
+            var queue = MenuBarInspector.elements(from: windows)
+            var visited = 0
+            while !queue.isEmpty && visited < 1500 {
+                let element = queue.removeFirst()
+                visited += 1
+                visit(element)
+                queue.append(contentsOf: MenuBarInspector.children(element))
+            }
+        }
+    }
 
-    on clickScreen(targetName, onlyChecked)
-        tell application "System Events" to tell process "ControlCenter"
-            repeat with el in (entire contents of window 1)
-                try
-                    if (role of el) is "AXCheckBox" then
-                        set itemLabel to ""
-                        try
-                            set itemLabel to (name of el) as text
-                        end try
-                        if itemLabel is "" or itemLabel is "missing value" then
-                            try
-                                set itemLabel to (description of el) as text
-                            end try
-                        end if
-                        set isChecked to 0
-                        try
-                            set isChecked to (value of el) as integer
-                        end try
-                        if (onlyChecked and isChecked is 1 and itemLabel does not contain "Mirroring") or ((not onlyChecked) and itemLabel is targetName) then
-                            click el
-                            return
-                        end if
-                    end if
-                end try
-            end repeat
-        end tell
-        my closePanel()
-        if onlyChecked then
-            error "Your Mac isn't mirroring to anything right now."
-        else
-            error "Couldn't find “" & targetName & "” in Screen Mirroring. Make sure the TV is on and on the same Wi-Fi."
-        end if
-    end clickScreen
+    private static func applications() -> [AXUIElement] {
+        cachedApplications
+    }
 
-    on formatScreens(screenList)
-        set out to ""
-        repeat with s in screenList
-            set out to out & (item 1 of s) & tab & (item 2 of s) & linefeed
-        end repeat
-        return out
-    end formatScreens
-    """#
+    private static func label(_ element: AXUIElement) -> String {
+        let desc = MenuBarInspector.string(element, kAXDescriptionAttribute)
+        return desc.isEmpty ? MenuBarInspector.string(element, kAXTitleAttribute) : desc
+    }
+
+    private static func isOn(_ element: AXUIElement) -> Bool {
+        MenuBarInspector.string(element, kAXValueAttribute) == "1"
+    }
 }
