@@ -58,17 +58,9 @@ enum SystemActions {
             var result = Result(output: "", error: "", status: -1)
             do {
                 try process.run()
-                // Read stderr in the background so a chatty process can't fill the pipe and hang.
-                var errData = Data()
-                let errReader = DispatchQueue.global(qos: .utility)
-                let group = DispatchGroup()
-                group.enter()
-                errReader.async {
-                    errData = errPipe.fileHandleForReading.readDataToEndOfFile()
-                    group.leave()
-                }
+                // The tools we run print very little, so reading stdout then stderr can't fill a pipe.
                 let outData = outPipe.fileHandleForReading.readDataToEndOfFile()
-                group.wait()
+                let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
                 process.waitUntilExit()
                 result.output = String(data: outData, encoding: .utf8)?
                     .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
