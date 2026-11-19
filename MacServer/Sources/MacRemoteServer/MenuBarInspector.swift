@@ -69,7 +69,7 @@ enum MenuBarInspector {
 
     // MARK: Helpers
 
-    private static func pid(of processName: String) -> pid_t? {
+    static func pid(of processName: String) -> pid_t? {
         if let app = NSWorkspace.shared.runningApplications.first(where: {
             $0.executableURL?.lastPathComponent == processName || $0.localizedName == processName
         }) {
@@ -87,20 +87,20 @@ enum MenuBarInspector {
         return output.split(separator: "\n").first.flatMap { pid_t($0) }
     }
 
-    private static func copy(_ element: AXUIElement, _ attribute: String) -> (CFTypeRef?, AXError) {
+    static func copy(_ element: AXUIElement, _ attribute: String) -> (CFTypeRef?, AXError) {
         var value: CFTypeRef?
         let error = AXUIElementCopyAttributeValue(element, attribute as CFString, &value)
         return (error == .success ? value : nil, error)
     }
 
-    private static func string(_ element: AXUIElement, _ attribute: String) -> String {
+    static func string(_ element: AXUIElement, _ attribute: String) -> String {
         guard let value = copy(element, attribute).0 else { return "" }
         if let s = value as? String { return s }
         if let n = value as? NSNumber { return n.stringValue }
         return ""
     }
 
-    private static func elements(from value: CFTypeRef) -> [AXUIElement] {
+    static func elements(from value: CFTypeRef) -> [AXUIElement] {
         if CFGetTypeID(value) == AXUIElementGetTypeID() {
             return [value as! AXUIElement]
         }
@@ -112,7 +112,7 @@ enum MenuBarInspector {
         return []
     }
 
-    private static func children(_ element: AXUIElement) -> [AXUIElement] {
+    static func children(_ element: AXUIElement) -> [AXUIElement] {
         guard let value = copy(element, kAXChildrenAttribute).0 else { return [] }
         return elements(from: value)
     }

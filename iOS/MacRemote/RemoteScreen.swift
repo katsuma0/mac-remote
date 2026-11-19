@@ -330,7 +330,7 @@ struct MirroringSheet: View {
                         .disabled(!isMirroring || remote.mirrorLoading)
                     Button("Open Screen Mirroring menu on the Mac") { remote.mirrorOpenOnMac() }
                 } footer: {
-                    Text("This uses the Screen Mirroring menu in your Mac's Control Center. The first time, your Mac asks whether Terminal (or MacRemoteServer) may control System Events: click OK.")
+                    Text("This presses the Screen Mirroring menu on your Mac for you. Keep its icon in the Mac's menu bar: System Settings → Control Center → Screen Mirroring → Always Show in Menu Bar.")
                 }
             }
             .navigationTitle("Screen Mirroring")
