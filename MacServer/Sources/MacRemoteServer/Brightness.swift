@@ -33,10 +33,10 @@ enum Brightness {
         return ids.first(where: { CGDisplayIsBuiltin($0) != 0 }) ?? CGMainDisplayID()
     }
 
-    static var isSupported: Bool { get() != nil }
+    static var isSupported: Bool { current() != nil }
 
     /// Current brightness 0–1, or nil if it can't be read.
-    static func get() -> Double? {
+    static func current() -> Double? {
         guard let getFunction else { return nil }
         var value: Float = 0
         guard getFunction(display, &value) == 0 else { return nil }

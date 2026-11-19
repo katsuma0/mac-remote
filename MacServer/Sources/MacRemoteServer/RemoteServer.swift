@@ -296,7 +296,7 @@ final class RemoteServer {
     }
 
     fileprivate func sendBrightness(to session: ClientSession) {
-        if let value = Brightness.get() {
+        if let value = Brightness.current() {
             session.send(RemoteCommand(t: "brightness", v: (value * 100).rounded()))
         } else {
             session.send(RemoteCommand(t: "brightness", e: "Brightness can't be read on this Mac's display."))
@@ -325,8 +325,10 @@ final class RemoteServer {
             connection.stateUpdateHandler = { [weak self] state in
                 guard let self else { return }
                 switch state {
-                case .failed, .cancelled:
-                    self.close()
+                case .failed(let error):
+                    self.close(reason: "connection failed: \(error)")
+                case .cancelled:
+                    self.close(reason: "connection cancelled")
                 default:
                     break
                 }
@@ -342,8 +344,10 @@ final class RemoteServer {
                     self.buffer.append(data)
                     self.processBuffer()
                 }
-                if isComplete || error != nil {
-                    self.close()
+                if let error {
+                    self.close(reason: "receive error: \(error)")
+                } else if isComplete {
+                    self.close(reason: "phone closed the connection")
                 } else {
                     self.receive()
                 }
@@ -356,7 +360,7 @@ final class RemoteServer {
                 buffer.removeSubrange(buffer.startIndex...newline)
                 handle(line)
             }
-            if buffer.count > 1_000_000 { close() }   // garbage / abuse
+            if buffer.count > 1_000_000 { close(reason: "too much data") }   // garbage / abuse
         }
 
         private func handle(_ line: Data) {
@@ -395,13 +399,15 @@ final class RemoteServer {
         }
 
         private func closeSoon() {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in self?.close() }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in self?.close(reason: "wrong PIN") }
         }
 
-        func close() {
+        func close(reason: String = "") {
             guard !closed else { return }
             closed = true
-            if authenticated { print("👋 Phone disconnected (\(peer))") }
+            if authenticated {
+                print("👋 Phone disconnected (\(peer))\(reason.isEmpty ? "" : " – \(reason)")")
+            }
             connection.stateUpdateHandler = nil
             connection.cancel()
             server?.remove(self)
