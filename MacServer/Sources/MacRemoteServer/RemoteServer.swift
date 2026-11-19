@@ -8,8 +8,10 @@ import SystemConfiguration
 final class RemoteServer {
     let pin: String
     let input = InputController()
-    let computerName: String = (SCDynamicStoreCopyComputerName(nil, nil) as String?)
-        ?? Host.current().localizedName ?? "Mac"
+    static var localComputerName: String {
+        (SCDynamicStoreCopyComputerName(nil, nil) as String?) ?? Host.current().localizedName ?? "Mac"
+    }
+    let computerName: String = RemoteServer.localComputerName
 
     /// Peer-to-peer Wi-Fi (AWDL, what AirDrop uses) lets the phone connect with no shared network,
     /// but it makes the Wi-Fi radio hop channels and adds latency spikes, so it is opt-in (--p2p).
@@ -21,6 +23,13 @@ final class RemoteServer {
     private var sessions: [ObjectIdentifier: ClientSession] = [:]
 
     // Brute-force protection for the PIN.
+    /// Called on the main queue when listening starts/stops or a phone connects/disconnects.
+    var onStatusChange: (() -> Void)?
+    private(set) var isListening = false
+    private var stopped = false
+
+    var connectedPhones: Int { sessions.values.filter { $0.authenticated }.count }
+
     private var failedAttempts = 0
     private var lockedUntil = Date.distantPast
 
@@ -55,7 +64,25 @@ final class RemoteServer {
 
     /// Mouse movement uses UDP: a lost packet is simply skipped instead of stalling everything
     /// behind it until TCP retransmits it (which feels like 200 ms+ of lag on Wi-Fi).
+    /// Stops listening and disconnects every phone. A stopped server can't be restarted; make a new one.
+    func stop() {
+        stopped = true
+        listener?.cancel()
+        listener = nil
+        udpListener?.cancel()
+        udpListener = nil
+        for session in Array(sessions.values) {
+            session.close(reason: "server stopped")
+        }
+        udpFlows.values.forEach { $0.cancel() }
+        udpFlows.removeAll()
+        input.releaseAll()
+        isListening = false
+        onStatusChange?()
+    }
+
     func startUDP(port: UInt16? = RemoteConstants.defaultPort) {
+        guard !stopped else { return }
         let newListener: NWListener
         do {
             if let port, let nwPort = NWEndpoint.Port(rawValue: port) {
@@ -64,22 +91,25 @@ final class RemoteServer {
                 newListener = try NWListener(using: udpParameters())
             }
         } catch {
-            print("⚠️  UDP unavailable (\(error)); mouse movement will use TCP.")
+            Log.write("⚠️  UDP unavailable (\(error)); mouse movement will use TCP.")
             return
         }
         newListener.stateUpdateHandler = { [weak self, weak newListener] state in
             guard let self, let newListener, newListener === self.udpListener else { return }
             switch state {
             case .ready:
-                print("✅ Fast mouse channel (UDP) on port \(newListener.port?.rawValue ?? 0)")
+                Log.write("✅ Fast mouse channel (UDP) on port \(newListener.port?.rawValue ?? 0)")
             case .failed(let error):
                 newListener.cancel()
                 self.udpListener = nil
                 if case .posix(let code) = error, code == .EADDRINUSE, port != nil {
                     self.startUDP(port: nil)
                 } else {
-                    print("⚠️  UDP listener failed (\(error)); retrying.")
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in self?.startUDP(port: port) }
+                    Log.write("⚠️  UDP listener failed (\(error)); retrying.")
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
+                        guard let self, !self.stopped else { return }
+                        self.startUDP(port: port)
+                    }
                 }
             default:
                 break
@@ -141,6 +171,7 @@ final class RemoteServer {
     }
 
     func start(port: UInt16? = RemoteConstants.defaultPort) {
+        guard !stopped else { return }
         let newListener: NWListener
         do {
             if let port, let nwPort = NWEndpoint.Port(rawValue: port) {
@@ -149,7 +180,7 @@ final class RemoteServer {
                 newListener = try NWListener(using: parameters())
             }
         } catch {
-            print("❌ Could not create listener: \(error)")
+            Log.write("❌ Could not create listener: \(error)")
             retry(port: nil)
             return
         }
@@ -160,14 +191,18 @@ final class RemoteServer {
             guard let self, let newListener, newListener === self.listener else { return }
             switch state {
             case .ready:
-                print("✅ Listening on port \(newListener.port?.rawValue ?? 0)")
+                Log.write("✅ Listening on port \(newListener.port?.rawValue ?? 0)")
+                self.isListening = true
+                self.onStatusChange?()
             case .waiting(let error):
-                print("⏳ Waiting for network: \(error)")
+                Log.write("⏳ Waiting for network: \(error)")
             case .failed(let error):
-                print("❌ Listener failed: \(error)")
+                Log.write("❌ Listener failed: \(error)")
+                self.isListening = false
+                self.onStatusChange?()
                 newListener.cancel()
                 if case .posix(let code) = error, code == .EADDRINUSE {
-                    print("   Port \(port ?? 0) is busy, using a random port instead.")
+                    Log.write("   Port \(port ?? 0) is busy, using a random port instead.")
                     self.retry(port: nil)
                 } else {
                     self.retry(port: port)
@@ -178,7 +213,7 @@ final class RemoteServer {
         }
         newListener.serviceRegistrationUpdateHandler = { change in
             if case .add(let endpoint) = change {
-                print("📡 Advertising on Bonjour as \(endpoint)")
+                Log.write("📡 Advertising on Bonjour as \(endpoint)")
             }
         }
         newListener.newConnectionHandler = { [weak self] connection in
@@ -208,6 +243,7 @@ final class RemoteServer {
             udpFlows.values.forEach { $0.cancel() }
             udpFlows.removeAll()
         }
+        onStatusChange?()
     }
 
     enum PinResult { case ok, wrong, locked }
@@ -222,7 +258,7 @@ final class RemoteServer {
         if failedAttempts >= 5 {
             failedAttempts = 0
             lockedUntil = Date().addingTimeInterval(60)
-            print("🔒 Too many wrong PINs, locking for 60 seconds.")
+            Log.write("🔒 Too many wrong PINs, locking for 60 seconds.")
         }
         return .wrong
     }
@@ -274,7 +310,7 @@ final class RemoteServer {
                                                s: screens.first(where: { $0.connected })?.name,
                                                m: screens.map(\.name)))
                 case .failure(let error):
-                    print("🖥  Screen Mirroring: \(error.message)")
+                    Log.write("🖥  Screen Mirroring: \(error.message)")
                     session.send(RemoteCommand(t: "mirroring", e: error.message))
                 }
             }
@@ -283,7 +319,7 @@ final class RemoteServer {
         case "ping":
             session.send(RemoteCommand(t: "pong"))
         default:
-            print("Unknown command: \(cmd.t)")
+            Log.write("Unknown command: \(cmd.t)")
         }
     }
 
@@ -373,14 +409,15 @@ final class RemoteServer {
                 switch server.checkPin(cmd.pin) {
                 case .ok:
                     authenticated = true
-                    print("📱 Phone connected (\(peer))")
+                    Log.write("📱 Phone connected (\(peer))")
+                    server.onStatusChange?()
                     var ok = RemoteCommand(t: "auth_ok", s: server.computerName, k: token)
                     if let udpPort = server.udpPort { ok.p = Int(udpPort) }
                     send(ok)
                     server.sendVolume(to: self)
                     server.sendBrightness(to: self)
                 case .wrong:
-                    print("⚠️  Wrong PIN from \(peer)")
+                    Log.write("⚠️  Wrong PIN from \(peer)")
                     send(RemoteCommand(t: "auth_fail", s: "Wrong PIN"))
                     closeSoon()
                 case .locked:
@@ -406,7 +443,7 @@ final class RemoteServer {
             guard !closed else { return }
             closed = true
             if authenticated {
-                print("👋 Phone disconnected (\(peer))\(reason.isEmpty ? "" : " – \(reason)")")
+                Log.write("👋 Phone disconnected (\(peer))\(reason.isEmpty ? "" : " – \(reason)")")
             }
             connection.stateUpdateHandler = nil
             connection.cancel()
