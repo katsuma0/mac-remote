@@ -27,6 +27,30 @@ A 6-digit **PIN** shown on the Mac stops other people on your network from conne
 
 You need Xcode, or just the Command Line Tools (`xcode-select --install`).
 
+### The Mac app (easiest)
+
+Build and install **Mac Remote.app** once:
+
+```bash
+cd MacServer
+./make-app.sh
+```
+
+This puts **Mac Remote** in your Applications folder and opens it. From then on, open it like any app: from Launchpad, Spotlight (⌘ Space → "Mac Remote") or the Dock.
+
+- Click **Connect – make this Mac findable**. Your iPhone can now see the Mac.
+- The window shows your **PIN**, whether an iPhone is connected, and an Activity log.
+- An icon in the **menu bar** (top right) shows it's running. You can close the window and it keeps running there. Use the menu bar icon to stop it, show the window again, or quit.
+- Options: start automatically when the app opens, open at login, allow direct connections without Wi-Fi.
+
+**Give it Accessibility permission.** The first time you click Connect, macOS asks. Turn on **Mac Remote** in System Settings → Privacy & Security → Accessibility. The window shows a warning until it's on.
+
+If you've signed in to Xcode, the script signs the app with your Apple Development certificate, so macOS keeps the permission when you rebuild. Otherwise you may have to turn it off and on again after running `./make-app.sh` again.
+
+After `git pull`, run `./make-app.sh` again to update the app.
+
+### Or run it from Terminal
+
 ```bash
 cd MacServer
 swift run -c release
@@ -39,14 +63,15 @@ It prints something like:
 🔑 PIN: 482913
 ```
 
-**Give it Accessibility permission.** macOS will ask the first time. If it doesn't:
-System Settings → Privacy & Security → **Accessibility** → turn on **Terminal** (or whichever terminal app you ran it from). Then press Ctrl+C and run it again. Without this, the mouse and keyboard won't respond.
+Here it's **Terminal** that needs Accessibility permission: System Settings → Privacy & Security → **Accessibility** → turn on **Terminal**. Then press Ctrl+C and run it again.
 
 If macOS asks whether to allow incoming network connections or local network access, click **Allow**.
 
-### Optional: start it automatically at login
+Run only one of these at a time: the app, Terminal, or the login agent below.
 
-So you don't need a Terminal window open:
+### Optional: a background service with no window
+
+If you don't want the app, this runs the server invisibly at every login:
 
 ```bash
 cd MacServer
@@ -119,7 +144,10 @@ Everything is on one screen:
 ```
 MacServer/                      Swift package for the Mac
   Sources/MacRemoteServer/
-    main.swift                  startup, PIN, permission check
+    Entry.swift                 starts the app, or the command-line server when run from Terminal
+    MacRemoteApp.swift          the Mac app: window, menu bar icon, app icon
+    AppModel.swift              the app's state: start/stop, PIN, permissions, login item
+    PinStore.swift, Log.swift   PIN file and log shared by the app and the command line
     RemoteServer.swift          Bonjour + TCP listener, PIN check, command dispatch
     InputController.swift       mouse / keyboard / media-key events (CGEvent)
     SystemActions.swift         volume (osascript), display sleep (pmset)
@@ -127,6 +155,7 @@ MacServer/                      Swift package for the Mac
     Mirroring.swift             AirPlay screen mirroring via the menu bar (Accessibility API)
     MenuBarInspector.swift      --dump-menubar diagnostic
     Protocol.swift              wire format (same file as the iOS one)
+  make-app.sh                   builds and installs Mac Remote.app
   install-agent.sh / uninstall-agent.sh
 iOS/
   MacRemote.xcodeproj

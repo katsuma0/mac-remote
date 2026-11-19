@@ -69,7 +69,7 @@ enum SystemActions {
                 result.status = process.terminationStatus
             } catch {
                 result.error = "Failed to run \(path): \(error)"
-                print(result.error)
+                Log.write(result.error)
             }
             DispatchQueue.main.async { completion?(result) }
         }

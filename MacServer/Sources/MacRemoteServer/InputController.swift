@@ -190,7 +190,7 @@ final class InputController {
     func key(_ name: String, modifiers: [String]) {
         let lower = name.lowercased()
         guard let code = Self.keyCodes[lower] else {
-            print("Unknown key: \(name)")
+            Log.write("Unknown key: \(name)")
             return
         }
         var flags: CGEventFlags = []
@@ -256,7 +256,7 @@ final class InputController {
 
     func media(_ name: String) {
         guard let key = Self.mediaKeys[name] else {
-            print("Unknown media key: \(name)")
+            Log.write("Unknown media key: \(name)")
             return
         }
         postSystemKey(key, down: true)
