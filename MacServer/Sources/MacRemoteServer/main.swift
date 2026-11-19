@@ -38,6 +38,9 @@ if args.contains("--help") || args.contains("-h") {
       --show-pin        Print the PIN and exit
       --reset-pin       Generate a new random PIN (phones will need the new one)
       --set-pin <pin>   Use your own PIN
+      --dump-menubar [text]
+                        Diagnostic: print how macOS exposes the menu bar (for Screen
+                        Mirroring). With text, also press the first item matching it.
       --p2p             Also allow direct Wi-Fi (AirDrop-style) connections when the
                         iPhone isn't on the same network. Can add some mouse lag.
     """)
@@ -66,6 +69,14 @@ if !AXIsProcessTrustedWithOptions([promptKey: true] as CFDictionary) {
        (It will keep running, but clicks and typing are ignored until permission is granted.)
 
     """)
+}
+
+// MARK: Diagnostics
+
+if let i = args.firstIndex(of: "--dump-menubar") {
+    let needle = (i + 1 < args.count && !args[i + 1].hasPrefix("--")) ? args[i + 1] : nil
+    MenuBarInspector.run(pressMatching: needle)
+    exit(0)
 }
 
 // MARK: Start
