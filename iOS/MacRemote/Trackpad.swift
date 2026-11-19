@@ -164,69 +164,6 @@ struct TrackpadSurface: UIViewRepresentable {
     }
 }
 
-// MARK: - Trackpad tab
-
-struct TrackpadScreen: View {
-    @EnvironmentObject var remote: RemoteConnection
-    @AppStorage("pointerSpeed") private var pointerSpeed = 1.5
-    @AppStorage("scrollSpeed") private var scrollSpeed = 1.0
-    @AppStorage("invertScroll") private var invertScroll = false
-    @AppStorage("haptics") private var haptics = true
-    @State private var typing = false
-
-    var body: some View {
-        VStack(spacing: 10) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 24, style: .continuous)
-                    .fill(Color(.secondarySystemBackground))
-                VStack(spacing: 10) {
-                    Image(systemName: "hand.draw")
-                        .font(.system(size: 40))
-                    Text("Tap to click · Two-finger tap to right-click\nTwo fingers to scroll · Touch and hold to drag")
-                        .font(.footnote)
-                        .multilineTextAlignment(.center)
-                }
-                .foregroundStyle(.tertiary)
-                .allowsHitTesting(false)
-
-                TrackpadSurface(remote: remote,
-                                pointerSpeed: pointerSpeed,
-                                scrollSpeed: scrollSpeed,
-                                invertScroll: invertScroll,
-                                haptics: haptics)
-            }
-
-            if typing {
-                SpecialKeysBar()
-            }
-
-            HStack(spacing: 10) {
-                MouseButtonView(title: "Left", right: false, haptics: haptics)
-                MouseButtonView(title: "Right", right: true, haptics: haptics)
-                Button {
-                    typing.toggle()
-                } label: {
-                    Image(systemName: typing ? "keyboard.chevron.compact.down" : "keyboard")
-                        .font(.title2)
-                        .frame(width: 64)
-                        .frame(maxHeight: .infinity)
-                        .background(typing ? Color.accentColor.opacity(0.3) : Color(.tertiarySystemFill),
-                                    in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-                }
-                .buttonStyle(.plain)
-            }
-            .frame(height: 64)
-        }
-        .padding()
-        .background(
-            KeyCaptureField(isActive: $typing,
-                            onText: { remote.type($0) },
-                            onBackspace: { remote.key("delete") })
-                .frame(width: 0, height: 0)
-        )
-    }
-}
-
 /// A big mouse button. Press and hold it while moving on the trackpad with another finger to drag.
 struct MouseButtonView: View {
     @EnvironmentObject var remote: RemoteConnection

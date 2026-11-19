@@ -8,6 +8,12 @@ struct DiscoveredMac: Identifiable, Hashable {
     var id: String { name }
 }
 
+struct MirrorScreen: Identifiable, Hashable {
+    let name: String
+    let connected: Bool
+    var id: String { name }
+}
+
 enum ConnectionState: Equatable {
     case disconnected
     case connecting(String)
@@ -23,6 +29,14 @@ final class RemoteConnection: ObservableObject {
     @Published private(set) var state: ConnectionState = .disconnected
     @Published private(set) var browseProblem: String?
     @Published private(set) var macVolume: Double = 50
+    @Published private(set) var macMuted = false
+    @Published private(set) var macBrightness: Double = 50
+    @Published private(set) var brightnessError: String?
+
+    @Published private(set) var mirrorScreens: [MirrorScreen] = []
+    @Published private(set) var mirrorLoading = false
+    @Published private(set) var mirrorError: String?
+    private var mirrorTimeout: DispatchWorkItem?
 
     private struct Target {
         let name: String
@@ -302,6 +316,20 @@ final class RemoteConnection: ObservableObject {
             state = .failed(msg.s ?? "Wrong PIN")
         case "volume":
             if let v = msg.v { macVolume = v }
+            if let s = msg.s { macMuted = (s == "muted") }
+        case "brightness":
+            if let v = msg.v {
+                macBrightness = v
+                brightnessError = nil
+            }
+            if let e = msg.e { brightnessError = e }
+        case "mirroring":
+            mirrorTimeout?.cancel()
+            mirrorLoading = false
+            mirrorError = msg.e
+            if msg.e == nil {
+                mirrorScreens = (msg.m ?? []).map { MirrorScreen(name: $0, connected: $0 == msg.s) }
+            }
         default:
             break
         }
@@ -402,7 +430,42 @@ final class RemoteConnection: ObservableObject {
     func system(_ action: String) { send(RemoteCommand(t: "system", s: action)) }
     func setVolume(_ value: Double) {
         macVolume = value
+        macMuted = false
         send(RemoteCommand(t: "volume", v: value))
+    }
+
+    func toggleMute() {
+        macMuted.toggle()   // optimistic; the Mac reports the real state right after
+        media("mute")
+    }
+
+    func setBrightness(_ value: Double) {
+        macBrightness = value
+        send(RemoteCommand(t: "brightness", v: value))
+    }
+
+    func doubleClick() { send(RemoteCommand(t: "dblclick")) }
+
+    // MARK: Screen mirroring (AirPlay, through the Mac's Control Center)
+
+    func mirrorRefresh() { mirror("list") }
+    func mirrorConnect(_ name: String) { mirror("connect", name: name) }
+    func mirrorStop() { mirror("stop") }
+    func mirrorOpenOnMac() { send(RemoteCommand(t: "mirror", s: "open")) }
+
+    private func mirror(_ action: String, name: String? = nil) {
+        guard authenticated else { return }
+        mirrorLoading = true
+        mirrorError = nil
+        send(RemoteCommand(t: "mirror", s: action, m: name.map { [$0] }))
+        mirrorTimeout?.cancel()
+        let timeout = DispatchWorkItem { [weak self] in
+            guard let self, self.mirrorLoading else { return }
+            self.mirrorLoading = false
+            self.mirrorError = "Your Mac didn't answer. Update MacRemoteServer on the Mac (git pull) and restart it."
+        }
+        mirrorTimeout = timeout
+        DispatchQueue.main.asyncAfter(deadline: .now() + 20, execute: timeout)
     }
 
     /// Sends a discrete command, preceded by any pending mouse movement so ordering is preserved.

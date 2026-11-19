@@ -6,7 +6,8 @@ enum SystemActions {
     private static var volumeBusy = false
     private static var pendingVolume: Int?
 
-    /// Sets output volume 0–100. Requests are coalesced so dragging a slider doesn't spawn hundreds of processes.
+    /// Sets output volume 0–100 (and unmutes). Requests are coalesced so dragging a slider
+    /// doesn't spawn hundreds of processes.
     static func setVolume(_ value: Int) {
         pendingVolume = max(0, min(100, value))
         runPendingVolume()
@@ -16,15 +17,21 @@ enum SystemActions {
         guard !volumeBusy, let v = pendingVolume else { return }
         pendingVolume = nil
         volumeBusy = true
-        run("/usr/bin/osascript", ["-e", "set volume output volume \(v)"]) { _ in
+        run("/usr/bin/osascript", ["-e", "set volume output volume \(v)",
+                                   "-e", "set volume output muted false"]) { _ in
             volumeBusy = false
             runPendingVolume()
         }
     }
 
-    static func getVolume(_ completion: @escaping (Int?) -> Void) {
-        run("/usr/bin/osascript", ["-e", "output volume of (get volume settings)"]) { output in
-            completion(Int(output))
+    /// Current output volume (nil when the output device has no volume, e.g. some HDMI/AirPlay outputs) and mute state.
+    static func getVolume(_ completion: @escaping (_ volume: Int?, _ muted: Bool) -> Void) {
+        run("/usr/bin/osascript", ["-e", "set s to get volume settings",
+                                   "-e", "return ((output volume of s) as text) & \",\" & ((output muted of s) as text)"]) { result in
+            let parts = result.output.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+            let volume = parts.first.flatMap { Int($0) }
+            let muted = parts.count > 1 && parts[1] == "true"
+            completion(volume, muted)
         }
     }
 
@@ -32,26 +39,47 @@ enum SystemActions {
         run("/usr/bin/pmset", ["displaysleepnow"])
     }
 
-    /// Runs a process off the main thread and calls back on the main queue with trimmed stdout.
-    static func run(_ path: String, _ args: [String], completion: ((String) -> Void)? = nil) {
+    struct Result {
+        var output: String
+        var error: String
+        var status: Int32
+    }
+
+    /// Runs a process off the main thread and calls back on the main queue with trimmed stdout/stderr.
+    static func run(_ path: String, _ args: [String], completion: ((Result) -> Void)? = nil) {
         DispatchQueue.global(qos: .userInitiated).async {
             let process = Process()
             process.executableURL = URL(fileURLWithPath: path)
             process.arguments = args
-            let pipe = Pipe()
-            process.standardOutput = pipe
-            process.standardError = FileHandle.nullDevice
-            var output = ""
+            let outPipe = Pipe()
+            let errPipe = Pipe()
+            process.standardOutput = outPipe
+            process.standardError = errPipe
+            var result = Result(output: "", error: "", status: -1)
             do {
                 try process.run()
-                let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                // Read stderr in the background so a chatty process can't fill the pipe and hang.
+                var errData = Data()
+                let errReader = DispatchQueue.global(qos: .utility)
+                let group = DispatchGroup()
+                group.enter()
+                errReader.async {
+                    errData = errPipe.fileHandleForReading.readDataToEndOfFile()
+                    group.leave()
+                }
+                let outData = outPipe.fileHandleForReading.readDataToEndOfFile()
+                group.wait()
                 process.waitUntilExit()
-                output = String(data: data, encoding: .utf8)?
+                result.output = String(data: outData, encoding: .utf8)?
                     .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                result.error = String(data: errData, encoding: .utf8)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                result.status = process.terminationStatus
             } catch {
-                print("Failed to run \(path): \(error)")
+                result.error = "Failed to run \(path): \(error)"
+                print(result.error)
             }
-            DispatchQueue.main.async { completion?(output) }
+            DispatchQueue.main.async { completion?(result) }
         }
     }
 }
