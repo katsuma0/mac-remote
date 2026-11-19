@@ -40,6 +40,7 @@ enum Mirroring {
             if result.status == 0 {
                 completion(.success(parse(result.output)))
             } else {
+                print("🖥  Screen Mirroring script error: \(result.error)")
                 completion(.failure(MirroringError(message: friendly(result.error))))
             }
             runNext()
@@ -62,8 +63,10 @@ enum Mirroring {
         if error.contains("-1743") || error.localizedCaseInsensitiveContains("not allowed to send") {
             return "Your Mac blocked controlling System Events. Allow it in System Settings → Privacy & Security → Automation (turn on System Events for Terminal or MacRemoteServer), then try again."
         }
-        if error.contains("-1719") || error.contains("-25211") || error.localizedCaseInsensitiveContains("assistive") {
-            return "MacRemoteServer needs Accessibility permission (System Settings → Privacy & Security → Accessibility)."
+        // -1719 also means "invalid index" (an item wasn't found), so only blame permissions when the
+        // message actually says so.
+        if error.contains("-25211") || error.localizedCaseInsensitiveContains("assistive access") {
+            return "Accessibility permission is missing for Terminal or MacRemoteServer (System Settings → Privacy & Security → Accessibility)."
         }
         // osascript errors look like "123:456: execution error: <message> (-2700)"
         if let range = error.range(of: "execution error: ") {
