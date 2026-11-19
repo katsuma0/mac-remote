@@ -95,6 +95,21 @@ final class InputController {
         mouseUp(right: right)
     }
 
+    /// A real double-click (click state 1 then 2), e.g. to open a file.
+    func doubleClick() {
+        releaseAll()
+        let p = cursor
+        for state: Int64 in [1, 2] {
+            clickState = state
+            postMouse(.leftMouseDown, at: p, button: .left)
+            postMouse(.leftMouseUp, at: p, button: .left)
+        }
+        // A click right after this counts as a triple-click, like on a real trackpad.
+        lastDownTime = ProcessInfo.processInfo.systemUptime
+        lastDownButton = .left
+        lastDownPoint = p
+    }
+
     func releaseAll() {
         mouseUp(right: false)
         mouseUp(right: true)

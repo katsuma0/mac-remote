@@ -6,6 +6,7 @@ struct KeysScreen: View {
     @State private var pressReturn = false
     @State private var liveTyping = false
     @State private var modifiers: Set<String> = []
+    @Environment(\.dismiss) private var dismiss
 
     private struct Key: Identifiable {
         let label: String
@@ -43,6 +44,7 @@ struct KeysScreen: View {
         Key(label: "Zoom Out", key: "-", mods: ["cmd"]),
         Key(label: "Full Screen", key: "f", mods: ["cmd", "ctrl"]),
         Key(label: "Quit App", key: "q", mods: ["cmd"]),
+        Key(label: "Lock Screen", key: "q", mods: ["cmd", "ctrl"]),
     ]
 
     private struct Modifier: Identifiable {
@@ -140,6 +142,11 @@ struct KeysScreen: View {
             }
             .scrollDismissesKeyboard(.never)
             .navigationTitle("Keyboard")
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") { dismiss() }
+                }
+            }
             .background(
                 KeyCaptureField(isActive: $liveTyping,
                                 onText: liveText,

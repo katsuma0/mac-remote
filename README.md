@@ -82,25 +82,30 @@ With a free Apple ID the app stops working after 7 days. Just press Run in Xcode
 
 Open Mac Remote, tap your Mac, and enter the PIN.
 
-**Trackpad tab**
-- One finger: move the pointer (faster swipes move it farther)
-- Tap: click. Double-tap: double-click
-- Two-finger tap: right-click
-- Two fingers: scroll
-- Touch and hold, then move: drag (or hold **Left** and move with another finger)
-- ⌨️ button: brings up the keyboard. What you type goes straight to the Mac, with an extra row for esc, tab, arrows and ⌘C/⌘V/⌘Z
+Everything is on one screen:
 
-**Keyboard tab:** live typing, paste and send longer text, ⌘⌥⌃⇧ modifiers, special keys (esc, arrows, page up/down…) and shortcuts (copy/paste, Spotlight, app switcher, Mission Control, new/close tab, zoom…).
+- **Top bar:** your Mac's name, the **Screen Mirroring** button (📺) and **Settings** (⚙︎).
+- **Volume:** mute button and a 0–100% slider.
+- **Brightness:** 0–100% slider and a **sleep display** button. The slider controls the built-in screen. External monitors can't be dimmed this way.
+- **Playback:** previous, play/pause, next.
+- **Trackpad:**
+  - One finger: move the pointer (faster swipes move it farther)
+  - Tap: click. Double-tap: double-click
+  - Two-finger tap: right-click
+  - Two fingers: scroll
+  - Touch and hold, then move: drag (or hold **Left** and move with another finger)
+- **Bottom row:** **Left**, **Double** (double-click), **Right**, and ⌨️ **keyboard**. The keyboard sends what you type straight to the Mac. While it's open, the media controls hide to make room, and a row of extra keys appears (esc, tab, arrows, ⌘C/⌘V/⌘Z, Spotlight…). **More** in that row opens the full key page: paste and send longer text, ⌘⌥⌃⇧ modifiers, page up/down, and shortcuts such as Mission Control, app switcher, zoom and Lock Screen.
 
-**Media tab:** volume up/down/mute plus a volume slider, play/pause, next/previous, brightness, sleep display, lock screen.
+**Screen Mirroring** lists the TVs and Apple TVs your Mac can mirror to. Tap one to start, or tap the one marked Mirroring to stop. It works by operating the Screen Mirroring menu in your Mac's Control Center. The first time, your Mac asks whether Terminal (or MacRemoteServer) may control **System Events**: click **OK**. If you clicked Don't Allow, turn it on under System Settings → Privacy & Security → Automation.
 
-**Settings tab:** pointer speed, scroll speed, reverse scrolling, haptics, disconnect.
+**Settings:** pointer speed, scroll speed, reverse scrolling, haptics, disconnect.
 
 ## Troubleshooting
 
 - **The Mac doesn't show up in the app:** make sure MacRemoteServer is running and both devices are on the same Wi-Fi. Check iPhone Settings → Privacy & Security → **Local Network** → Mac Remote is on. On a Mac with the firewall on, allow incoming connections for the server. As a fallback, connect by IP.
 - **It connects, but nothing moves:** this is Accessibility permission. Turn it on (see step 1) and restart the server.
-- **Volume buttons work but brightness doesn't:** some external displays don't support brightness keys.
+- **Brightness slider is greyed out:** your Mac's display doesn't allow setting brightness this way. This is normal for external monitors.
+- **Screen Mirroring shows an error:** make sure the TV is on and on the same Wi-Fi, and that System Events is allowed under Privacy & Security → Automation. Apple sometimes changes Control Center's layout in new macOS versions. If it says it couldn't find Screen Mirroring, send me the message.
 - **"Wrong PIN":** run `--show-pin` on the Mac. After 5 wrong tries the server locks for a minute.
 
 ## Security notes
@@ -118,6 +123,8 @@ MacServer/                      Swift package for the Mac
     RemoteServer.swift          Bonjour + TCP listener, PIN check, command dispatch
     InputController.swift       mouse / keyboard / media-key events (CGEvent)
     SystemActions.swift         volume (osascript), display sleep (pmset)
+    Brightness.swift            built-in display brightness (DisplayServices)
+    Mirroring.swift             AirPlay screen mirroring via Control Center (AppleScript)
     Protocol.swift              wire format (same file as the iOS one)
   install-agent.sh / uninstall-agent.sh
 iOS/
@@ -128,9 +135,10 @@ iOS/
     MacRemoteApp.swift, ContentView.swift
     RemoteConnection.swift      discovery, connection, auto-reconnect, motion coalescing
     ConnectView.swift           pick a Mac / enter PIN
+    RemoteScreen.swift          main screen: media controls, trackpad, buttons, Screen Mirroring sheet
     Trackpad.swift              multi-touch trackpad + mouse buttons
     KeyCapture.swift            live keyboard → Mac
-    KeysScreen.swift, MediaScreen.swift, SettingsScreen.swift
+    KeysScreen.swift, SettingsScreen.swift
     Protocol.swift
 ```
 

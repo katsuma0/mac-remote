@@ -235,6 +235,8 @@ final class RemoteServer {
             input.scroll(dx: cmd.dx ?? 0, dy: cmd.dy ?? 0)
         case "click":
             input.click(right: cmd.b == "right")
+        case "dblclick":
+            input.doubleClick()
         case "down":
             input.mouseDown(right: cmd.b == "right")
         case "up":
@@ -246,6 +248,11 @@ final class RemoteServer {
         case "media":
             let name = cmd.s ?? ""
             input.media(name)
+            if ["brightup", "brightdown"].contains(name) {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+                    self?.sendBrightness(to: session)
+                }
+            }
             if ["volup", "voldown", "mute"].contains(name) {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
                     self?.sendVolume(to: session)
@@ -253,6 +260,24 @@ final class RemoteServer {
             }
         case "volume":
             SystemActions.setVolume(Int((cmd.v ?? 0).rounded()))
+        case "brightness":
+            if !Brightness.set((cmd.v ?? 0) / 100) {
+                session.send(RemoteCommand(t: "brightness", e: "Brightness can't be set on this Mac's display."))
+            }
+        case "mirror":
+            let action = Mirroring.Action(rawValue: cmd.s ?? "list") ?? .list
+            Mirroring.perform(action, name: cmd.m?.first) { result in
+                guard action != .open else { return }
+                switch result {
+                case .success(let screens):
+                    session.send(RemoteCommand(t: "mirroring",
+                                               s: screens.first(where: { $0.connected })?.name,
+                                               m: screens.map(\.name)))
+                case .failure(let error):
+                    print("🖥  Screen Mirroring: \(error.message)")
+                    session.send(RemoteCommand(t: "mirroring", e: error.message))
+                }
+            }
         case "system":
             if cmd.s == "sleepdisplay" { SystemActions.sleepDisplay() }
         case "ping":
@@ -263,9 +288,18 @@ final class RemoteServer {
     }
 
     fileprivate func sendVolume(to session: ClientSession) {
-        SystemActions.getVolume { volume in
-            guard let volume else { return }
-            session.send(RemoteCommand(t: "volume", v: Double(volume)))
+        SystemActions.getVolume { volume, muted in
+            var msg = RemoteCommand(t: "volume", s: muted ? "muted" : "unmuted")
+            if let volume { msg.v = Double(volume) }
+            session.send(msg)
+        }
+    }
+
+    fileprivate func sendBrightness(to session: ClientSession) {
+        if let value = Brightness.get() {
+            session.send(RemoteCommand(t: "brightness", v: (value * 100).rounded()))
+        } else {
+            session.send(RemoteCommand(t: "brightness", e: "Brightness can't be read on this Mac's display."))
         }
     }
 
@@ -340,6 +374,7 @@ final class RemoteServer {
                     if let udpPort = server.udpPort { ok.p = Int(udpPort) }
                     send(ok)
                     server.sendVolume(to: self)
+                    server.sendBrightness(to: self)
                 case .wrong:
                     print("⚠️  Wrong PIN from \(peer)")
                     send(RemoteCommand(t: "auth_fail", s: "Wrong PIN"))

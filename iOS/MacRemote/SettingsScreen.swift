@@ -6,13 +6,17 @@ struct SettingsScreen: View {
     @AppStorage("scrollSpeed") private var scrollSpeed = 1.0
     @AppStorage("invertScroll") private var invertScroll = false
     @AppStorage("haptics") private var haptics = true
+    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         NavigationStack {
             Form {
                 Section("Connected to") {
                     Label(remote.macName, systemImage: "laptopcomputer")
-                    Button("Disconnect", role: .destructive) { remote.disconnect() }
+                    Button("Disconnect", role: .destructive) {
+                        dismiss()
+                        remote.disconnect()
+                    }
                 }
 
                 Section("Trackpad") {
@@ -35,11 +39,16 @@ struct SettingsScreen: View {
                 }
 
                 Section("Gestures") {
-                    Text("• Move one finger to move the pointer\n• Tap to click, double-tap to double-click\n• Tap with two fingers to right-click\n• Move two fingers to scroll\n• Touch and hold, then move, to drag\n• Or hold the Left button and move with another finger")
+                    Text("• Move one finger to move the pointer\n• Tap to click, double-tap to double-click\n• Tap with two fingers to right-click\n• Move two fingers to scroll\n• Touch and hold, then move, to drag\n• Or hold the Left button and move with another finger\n• Double: double-clicks where the pointer is")
                         .font(.footnote)
                 }
             }
             .navigationTitle("Settings")
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") { dismiss() }
+                }
+            }
         }
     }
 }

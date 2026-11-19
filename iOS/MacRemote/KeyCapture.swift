@@ -70,6 +70,7 @@ struct KeyCaptureField: UIViewRepresentable {
 /// A row of keys the iPhone keyboard doesn't have.
 struct SpecialKeysBar: View {
     @EnvironmentObject var remote: RemoteConnection
+    var onMore: (() -> Void)? = nil
 
     private struct BarKey: Identifiable {
         let label: String
@@ -90,11 +91,20 @@ struct SpecialKeysBar: View {
         BarKey(label: "⌘Z", key: "z", mods: ["cmd"]),
         BarKey(label: "⌘A", key: "a", mods: ["cmd"]),
         BarKey(label: "⌘⌫", key: "delete", mods: ["cmd"]),
+        BarKey(label: "⌘␣", key: "space", mods: ["cmd"]),
+        BarKey(label: "⌘⇥", key: "tab", mods: ["cmd"]),
     ]
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
+                if let onMore {
+                    Button(action: onMore) {
+                        Label("More", systemImage: "ellipsis.circle")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .font(.callout)
+                }
                 ForEach(keys) { k in
                     Button(k.label) { remote.key(k.key, k.mods) }
                         .buttonStyle(.bordered)

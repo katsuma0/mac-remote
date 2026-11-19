@@ -5,28 +5,20 @@ struct ContentView: View {
 
     var body: some View {
         if remote.isSessionActive {
-            ControlTabs()
+            MainView()
         } else {
             ConnectView()
         }
     }
 }
 
-struct ControlTabs: View {
+/// The remote, with a banner while it reconnects.
+struct MainView: View {
     @EnvironmentObject var remote: RemoteConnection
 
     var body: some View {
-        TabView {
-            TrackpadScreen()
-                .tabItem { Label("Trackpad", systemImage: "hand.point.up.left") }
-            KeysScreen()
-                .tabItem { Label("Keyboard", systemImage: "keyboard") }
-            MediaScreen()
-                .tabItem { Label("Media", systemImage: "speaker.wave.2") }
-            SettingsScreen()
-                .tabItem { Label("Settings", systemImage: "gearshape") }
-        }
-        .safeAreaInset(edge: .top, spacing: 0) {
+        RemoteScreen()
+            .safeAreaInset(edge: .top, spacing: 0) {
             if case .reconnecting(let name) = remote.state {
                 HStack(spacing: 8) {
                     ProgressView()
