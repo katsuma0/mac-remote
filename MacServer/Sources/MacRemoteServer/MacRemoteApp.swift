@@ -1,14 +1,14 @@
 import AppKit
 import SwiftUI
 
-/// The Mac app: a window with a Start button and the PIN, a Dock icon, and a menu bar icon that
-/// stays while it runs in the background. Closing the window doesn't quit; use Quit in either menu.
+/// The Mac app: a window with an on/off button, paired iPhones and pairing, a Dock icon, and a
+/// menu bar icon that stays while it runs in the background. Closing the window doesn't quit.
 struct MacRemoteApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var model = AppModel.shared
 
     var body: some Scene {
-        Window("Mac Remote", id: "main") {
+        Window("Couchpad", id: "main") {
             MainWindow()
                 .environmentObject(model)
         }
@@ -18,17 +18,19 @@ struct MacRemoteApp: App {
             MenuBarMenu()
                 .environmentObject(model)
         } label: {
-            Image(systemName: model.isRunning
-                  ? (model.connectedPhones > 0 ? "iphone.radiowaves.left.and.right" : "iphone")
-                  : "iphone.slash")
+            Image(systemName: menuBarSymbol)
         }
+    }
+
+    private var menuBarSymbol: String {
+        if !model.isRunning { return "cursorarrow.slash" }
+        return model.connectedPhoneNames.isEmpty ? "cursorarrow" : "cursorarrow.motionlines"
     }
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)          // show in the Dock
-        NSApp.applicationIconImage = AppIcon.image()
         NSApp.activate(ignoringOtherApps: true)
         AppModel.shared.appDidLaunch()
     }
@@ -49,122 +51,271 @@ struct MainWindow: View {
     @EnvironmentObject var model: AppModel
 
     var body: some View {
-        VStack(spacing: 18) {
-            HStack(spacing: 14) {
-                Image(nsImage: AppIcon.image())
-                    .resizable()
-                    .frame(width: 56, height: 56)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Mac Remote")
-                        .font(.title2.weight(.bold))
-                    Text(model.computerName)
-                        .foregroundStyle(.secondary)
-                }
-                Spacer()
+        VStack(spacing: 16) {
+            header
+            statusRow
+            onOffButton
+
+            if let name = model.pairingRequestedBy, !model.showingPairing {
+                pairingRequestBanner(name)
             }
 
-            // Status
-            HStack(spacing: 10) {
-                Circle()
-                    .fill(statusColor)
-                    .frame(width: 12, height: 12)
-                Text(model.statusText)
-                    .font(.headline)
-                Spacer()
-            }
-            .padding(12)
-            .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 10))
-
-            // The big button
-            Button {
-                model.toggle()
-            } label: {
-                Label(model.isRunning ? "Stop" : "Connect – make this Mac findable",
-                      systemImage: model.isRunning ? "stop.fill" : "antenna.radiowaves.left.and.right")
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 6)
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(model.isRunning ? .red : .accentColor)
-            .controlSize(.large)
-            .keyboardShortcut(.defaultAction)
-
-            // PIN
-            VStack(spacing: 6) {
-                Text("PIN to enter on your iPhone")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Text(spacedPin)
-                    .font(.system(size: 40, weight: .bold, design: .monospaced))
-                    .textSelection(.enabled)
-                HStack {
-                    Button("Copy") { model.copyPin() }
-                    Button("New PIN") { model.newPin() }
-                }
-                .controlSize(.small)
-            }
-            .frame(maxWidth: .infinity)
-            .padding(12)
-            .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 10))
+            pairedPhones
 
             if !model.accessibilityGranted {
-                VStack(alignment: .leading, spacing: 8) {
-                    Label("Permission needed", systemImage: "exclamationmark.triangle.fill")
-                        .font(.headline)
-                        .foregroundStyle(.orange)
-                    Text("To move the mouse and type, turn on **Mac Remote** in System Settings → Privacy & Security → Accessibility.")
-                        .font(.callout)
-                        .fixedSize(horizontal: false, vertical: true)
-                    Button("Open Accessibility Settings") { model.openAccessibilitySettings() }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(12)
-                .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
+                permissionWarning
             }
 
             VStack(alignment: .leading, spacing: 6) {
-                Toggle("Start automatically when Mac Remote opens", isOn: $model.startAutomatically)
-                Toggle("Open Mac Remote when I log in", isOn: $model.openAtLogin)
+                Toggle("Turn on automatically when Couchpad opens", isOn: $model.startAutomatically)
+                Toggle("Open Couchpad when I log in", isOn: $model.openAtLogin)
                 Toggle("Allow direct connection without Wi-Fi (can add lag)", isOn: $model.peerToPeer)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
-            DisclosureGroup("Activity") {
-                ScrollViewReader { proxy in
-                    ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 2) {
-                            ForEach(Array(model.activity.enumerated()), id: \.offset) { index, line in
-                                Text(line)
-                                    .font(.system(.caption, design: .monospaced))
-                                    .textSelection(.enabled)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .id(index)
-                            }
-                        }
-                    }
-                    .frame(height: 120)
-                    .onChange(of: model.activity.count) { count in
-                        proxy.scrollTo(count - 1, anchor: .bottom)
-                    }
-                }
-            }
+            activityLog
 
-            Text("You can close this window – Mac Remote keeps running in the menu bar.")
+            Text("You can close this window – Couchpad keeps running in the menu bar.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
         .padding(24)
-        .frame(width: 440)
+        .frame(width: 460)
+        .sheet(isPresented: $model.showingPairing, onDismiss: { model.endPairing() }) {
+            PairingSheet()
+                .environmentObject(model)
+        }
+    }
+
+    private var header: some View {
+        HStack(spacing: 14) {
+            Image(nsImage: NSApp.applicationIconImage)
+                .resizable()
+                .frame(width: 60, height: 60)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Couchpad")
+                    .font(.title2.weight(.bold))
+                Text(model.computerName)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+        }
+    }
+
+    private var statusRow: some View {
+        HStack(spacing: 10) {
+            Circle()
+                .fill(statusColor)
+                .frame(width: 12, height: 12)
+            Text(model.statusText)
+                .font(.headline)
+            Spacer()
+        }
+        .padding(12)
+        .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    private var onOffButton: some View {
+        Button {
+            model.toggle()
+        } label: {
+            Label(model.isRunning ? "Turn Off" : "Turn On – make this Mac findable",
+                  systemImage: model.isRunning ? "power" : "antenna.radiowaves.left.and.right")
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 6)
+        }
+        .buttonStyle(.borderedProminent)
+        .tint(model.isRunning ? .red : .accentColor)
+        .controlSize(.large)
+    }
+
+    private func pairingRequestBanner(_ name: String) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: "iphone.radiowaves.left.and.right")
+                .font(.title2)
+            Text("“\(name)” wants to pair with this Mac.")
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer()
+            Button("Pair…") { model.beginPairing() }
+                .buttonStyle(.borderedProminent)
+            Button {
+                model.pairingRequestedBy = nil
+            } label: {
+                Image(systemName: "xmark")
+            }
+            .buttonStyle(.borderless)
+        }
+        .padding(12)
+        .background(Color.accentColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    private var pairedPhones: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Paired iPhones")
+                    .font(.headline)
+                Spacer()
+                Button {
+                    model.beginPairing()
+                } label: {
+                    Label("Pair iPhone…", systemImage: "plus")
+                }
+                .controlSize(.small)
+            }
+            if model.pairedPhones.isEmpty {
+                Text("No iPhones yet. Click “Pair iPhone…”, then scan the code with your iPhone.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                ForEach(model.pairedPhones) { phone in
+                    HStack(spacing: 10) {
+                        Image(systemName: "iphone")
+                            .foregroundStyle(.secondary)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(phone.name)
+                            Text(model.isConnected(phone) ? "Connected" : lastSeenText(phone))
+                                .font(.caption)
+                                .foregroundStyle(model.isConnected(phone) ? Color.green : Color.secondary)
+                        }
+                        Spacer()
+                        Button(role: .destructive) {
+                            model.unpair(phone)
+                        } label: {
+                            Image(systemName: "trash")
+                        }
+                        .buttonStyle(.borderless)
+                        .help("Unpair this iPhone")
+                    }
+                }
+            }
+        }
+        .padding(12)
+        .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    private var permissionWarning: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label("Permission needed", systemImage: "exclamationmark.triangle.fill")
+                .font(.headline)
+                .foregroundStyle(.orange)
+            Text("To move the pointer and type, turn on **Couchpad** in System Settings → Privacy & Security → Accessibility.")
+                .font(.callout)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack {
+                Button("Open Accessibility Settings") { model.openAccessibilitySettings() }
+                Button("Ask Again") { model.requestAccessibility() }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
+        .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    private var activityLog: some View {
+        DisclosureGroup("Activity") {
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 2) {
+                        ForEach(Array(model.activity.enumerated()), id: \.offset) { index, line in
+                            Text(line)
+                                .font(.system(.caption, design: .monospaced))
+                                .textSelection(.enabled)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .id(index)
+                        }
+                    }
+                }
+                .frame(height: 110)
+                .onChange(of: model.activity.count) { count in
+                    proxy.scrollTo(count - 1, anchor: .bottom)
+                }
+            }
+        }
     }
 
     private var statusColor: Color {
         guard model.isRunning else { return .gray }
-        if model.connectedPhones > 0 { return .green }
+        if !model.connectedPhoneNames.isEmpty { return .green }
         return model.isListening ? .blue : .yellow
     }
 
-    private var spacedPin: String {
-        model.pin.count == 6 ? "\(model.pin.prefix(3)) \(model.pin.suffix(3))" : model.pin
+    private func lastSeenText(_ phone: PairedPhone) -> String {
+        guard let lastSeen = phone.lastSeen else { return "Paired" }
+        return "Last connected " + lastSeen.formatted(.relative(presentation: .named))
+    }
+}
+
+// MARK: - Pairing sheet
+
+struct PairingSheet: View {
+    @EnvironmentObject var model: AppModel
+
+    var body: some View {
+        VStack(spacing: 16) {
+            if let name = model.justPaired {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.system(size: 64))
+                    .foregroundStyle(.green)
+                Text("Paired with \(name)")
+                    .font(.title2.weight(.semibold))
+                Text("You can now control this Mac from your iPhone.")
+                    .foregroundStyle(.secondary)
+                Button("Done") { model.endPairing() }
+                    .keyboardShortcut(.defaultAction)
+                    .controlSize(.large)
+            } else if let pairing = model.pairing {
+                Text("Pair your iPhone")
+                    .font(.title2.weight(.semibold))
+                Text("Point your iPhone's camera at this code, or tap **Scan Pairing Code** in Couchpad on your iPhone.")
+                    .multilineTextAlignment(.center)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                if let qr = AppModel.qrCode(for: pairing.link) {
+                    Image(nsImage: qr)
+                        .interpolation(.none)
+                        .resizable()
+                        .frame(width: 220, height: 220)
+                        .padding(12)
+                        .background(Color.white, in: RoundedRectangle(cornerRadius: 12))
+                }
+
+                VStack(spacing: 4) {
+                    Text("Or enter this code on your iPhone")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Text("\(pairing.code.prefix(3)) \(pairing.code.suffix(3))")
+                        .font(.system(size: 36, weight: .bold, design: .monospaced))
+                        .textSelection(.enabled)
+                }
+
+                TimelineView(.periodic(from: .now, by: 1)) { context in
+                    let remaining = max(0, Int(pairing.expires.timeIntervalSince(context.date)))
+                    Text("Expires in \(remaining / 60):\(String(format: "%02d", remaining % 60))")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+
+                Button("Cancel") { model.endPairing() }
+                    .keyboardShortcut(.cancelAction)
+            } else {
+                Image(systemName: "clock")
+                    .font(.system(size: 48))
+                    .foregroundStyle(.secondary)
+                Text("Pairing closed")
+                    .font(.title3.weight(.semibold))
+                Text("The code expired or was entered wrong too many times.")
+                    .foregroundStyle(.secondary)
+                HStack {
+                    Button("Close") { model.endPairing() }
+                    Button("Try Again") { model.beginPairing() }
+                        .buttonStyle(.borderedProminent)
+                }
+            }
+        }
+        .padding(28)
+        .frame(width: 380)
     }
 }
 
@@ -176,76 +327,26 @@ struct MenuBarMenu: View {
 
     var body: some View {
         Text(model.statusText)
-        if model.isRunning {
-            Text("PIN: \(model.pin)")
-        }
         Divider()
-        Button(model.isRunning ? "Stop" : "Connect – make this Mac findable") {
+        Button(model.isRunning ? "Turn Off" : "Turn On") {
             model.toggle()
         }
-        Button("Show Mac Remote Window") {
-            openWindow(id: "main")
-            NSApp.activate(ignoringOtherApps: true)
+        Button("Pair iPhone…") {
+            showWindow()
+            model.beginPairing()
+        }
+        Button("Show Couchpad Window") {
+            showWindow()
         }
         Divider()
-        Button("Quit Mac Remote") {
+        Button("Quit Couchpad") {
             NSApp.terminate(nil)
         }
         .keyboardShortcut("q")
     }
-}
 
-// MARK: - Icon
-
-/// The app icon, drawn in code (blue rounded square with a phone + radio waves).
-enum AppIcon {
-    private static var cached: NSImage?
-
-    static func image() -> NSImage {
-        if let cached { return cached }
-        let image = draw(size: 1024)
-        cached = image
-        return image
-    }
-
-    static func draw(size: CGFloat) -> NSImage {
-        let image = NSImage(size: NSSize(width: size, height: size))
-        image.lockFocus()
-        let inset = size * 0.08
-        let rect = NSRect(x: inset, y: inset, width: size - 2 * inset, height: size - 2 * inset)
-        let background = NSBezierPath(roundedRect: rect, xRadius: size * 0.2, yRadius: size * 0.2)
-        NSGradient(starting: NSColor(calibratedRed: 0.25, green: 0.55, blue: 1.0, alpha: 1),
-                   ending: NSColor(calibratedRed: 0.35, green: 0.25, blue: 0.85, alpha: 1))?
-            .draw(in: background, angle: -90)
-
-        let config = NSImage.SymbolConfiguration(pointSize: size * 0.42, weight: .semibold)
-        if let symbol = NSImage(systemSymbolName: "iphone.radiowaves.left.and.right", accessibilityDescription: nil)?
-            .withSymbolConfiguration(config) {
-            let symbolSize = symbol.size
-            let white = NSImage(size: symbolSize)
-            white.lockFocus()
-            symbol.draw(in: NSRect(origin: .zero, size: symbolSize))
-            NSColor.white.set()
-            NSRect(origin: .zero, size: symbolSize).fill(using: .sourceAtop)
-            white.unlockFocus()
-            white.draw(in: NSRect(x: (size - symbolSize.width) / 2, y: (size - symbolSize.height) / 2,
-                                  width: symbolSize.width, height: symbolSize.height))
-        }
-        image.unlockFocus()
-        return image
-    }
-
-    /// Used by make-app.sh to build the .icns file.
-    static func writePNG(to url: URL) -> Bool {
-        let image = draw(size: 1024)
-        guard let tiff = image.tiffRepresentation,
-              let bitmap = NSBitmapImageRep(data: tiff),
-              let png = bitmap.representation(using: .png, properties: [:]) else { return false }
-        do {
-            try png.write(to: url)
-            return true
-        } catch {
-            return false
-        }
+    private func showWindow() {
+        openWindow(id: "main")
+        NSApp.activate(ignoringOtherApps: true)
     }
 }

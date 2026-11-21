@@ -178,27 +178,43 @@ struct MediaControls: View {
                     .frame(width: 38, alignment: .trailing)
             }
 
-            // Brightness: 0–100% slider + sleep display
+            // Brightness: a 0–100% slider where the Mac supports it, otherwise −/+ (the brightness
+            // keys); then sleep display, or lock screen where the Mac can't sleep the display.
             HStack(spacing: 10) {
-                Image(systemName: "sun.max.fill")
-                    .font(.body)
-                    .foregroundStyle(.secondary)
-                    .frame(width: 40)
-                Slider(value: $brightness, in: 0...100, step: 1, onEditingChanged: { editing in
-                    editingBrightness = editing
-                    if !editing { remote.setBrightness(brightness) }
-                })
-                .disabled(remote.brightnessError != nil)
-                SmallIconButton(icon: "moon.zzz.fill", highlighted: false, haptics: haptics) {
-                    remote.system("sleepdisplay")
+                if remote.supports(Capability.brightnessSlider) {
+                    Image(systemName: "sun.max.fill")
+                        .font(.body)
+                        .foregroundStyle(.secondary)
+                        .frame(width: 40)
+                    Slider(value: $brightness, in: 0...100, step: 1, onEditingChanged: { editing in
+                        editingBrightness = editing
+                        if !editing { remote.setBrightness(brightness) }
+                    })
+                } else {
+                    SmallIconButton(icon: "sun.min.fill", highlighted: false, haptics: haptics) {
+                        remote.media("brightdown")
+                    }
+                    .accessibilityLabel("Dimmer")
+                    Text("Brightness")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity)
+                    SmallIconButton(icon: "sun.max.fill", highlighted: false, haptics: haptics) {
+                        remote.media("brightup")
+                    }
+                    .accessibilityLabel("Brighter")
                 }
-                .accessibilityLabel("Sleep display")
-            }
-            if let error = remote.brightnessError {
-                Text(error)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                if remote.supports(Capability.sleepDisplay) {
+                    SmallIconButton(icon: "moon.zzz.fill", highlighted: false, haptics: haptics) {
+                        remote.system("sleepdisplay")
+                    }
+                    .accessibilityLabel("Sleep display")
+                } else {
+                    SmallIconButton(icon: "lock.fill", highlighted: false, haptics: haptics) {
+                        remote.key("q", ["cmd", "ctrl"])
+                    }
+                    .accessibilityLabel("Lock screen")
+                }
             }
 
             // Playback

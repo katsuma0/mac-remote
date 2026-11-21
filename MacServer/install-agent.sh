@@ -36,9 +36,17 @@ launchctl bootstrap "gui/$(id -u)" "$PLIST"
 
 echo
 echo "✅ Installed. MacRemoteServer now runs in the background and starts at login."
-echo "🔑 PIN: $("$BIN" --show-pin)"
+sleep 2
+CODE="$(grep -oE '^ +[0-9]{3} [0-9]{3}$' "$DEST/server.log" | tail -1 | tr -d ' ')"
+if [ -n "$CODE" ]; then
+    echo "🔗 Pairing is open for 3 minutes. On your iPhone, pick this Mac and enter: $CODE"
+else
+    echo "🔗 To pair another iPhone later, use the Couchpad app (Pair iPhone…), or run:"
+    echo "   ./uninstall-agent.sh && swift run -c release MacRemoteServer --pair"
+fi
 echo
 echo "IMPORTANT: macOS will ask for Accessibility permission for 'MacRemoteServer'."
+echo "Tip: the Couchpad app (./make-app.sh) is easier – it has a window, a menu bar icon and pairing."
 echo "  System Settings → Privacy & Security → Accessibility → turn on MacRemoteServer."
 echo "  (If it's already listed from an older build, remove it with '−' and run this script again.)"
 echo "Log file: $DEST/server.log"

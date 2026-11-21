@@ -1,18 +1,35 @@
 import AppKit
-import ApplicationServices
 import Combine
+import CoreImage.CIFilterBuiltins
 import ServiceManagement
+#if canImport(RemoteCore)
+import RemoteCore
+#endif
 
 /// State behind the Mac app's window and menu bar icon. Everything runs on the main queue.
 final class AppModel: ObservableObject {
     static let shared = AppModel()
 
+    struct PairingInfo: Equatable {
+        let code: String
+        let link: URL
+        let expires: Date
+    }
+
     @Published private(set) var isRunning = false
     @Published private(set) var isListening = false
-    @Published private(set) var connectedPhones = 0
-    @Published private(set) var pin = PinStore.load()
-    @Published private(set) var accessibilityGranted = AXIsProcessTrusted()
+    @Published private(set) var connectedPhoneNames: [String] = []
+    @Published private(set) var connectedPhoneIds: Set<String> = []
+    @Published private(set) var pairedPhones: [PairedPhone] = []
+    @Published private(set) var accessibilityGranted = Permissions.isGranted
     @Published private(set) var activity: [String] = []
+
+    /// Pairing sheet state.
+    @Published var showingPairing = false
+    @Published private(set) var pairing: PairingInfo?
+    @Published private(set) var justPaired: String?
+    /// An unpaired iPhone tried to connect while pairing was closed.
+    @Published var pairingRequestedBy: String?
 
     @Published var peerToPeer = UserDefaults.standard.bool(forKey: "peerToPeer") {
         didSet {
@@ -21,7 +38,7 @@ final class AppModel: ObservableObject {
         }
     }
 
-    @Published var startAutomatically = UserDefaults.standard.bool(forKey: "startAutomatically") {
+    @Published var startAutomatically = UserDefaults.standard.object(forKey: "startAutomatically") as? Bool ?? true {
         didSet { UserDefaults.standard.set(startAutomatically, forKey: "startAutomatically") }
     }
 
@@ -41,10 +58,14 @@ final class AppModel: ObservableObject {
 
     private init() {
         Log.handler = { [weak self] line in self?.append(line) }
-        // Re-check Accessibility every couple of seconds so the window updates as soon as it's granted.
+        pairedPhones = PairingStore.shared.phones
+        PairingStore.shared.onChange = { [weak self] in
+            self?.pairedPhones = PairingStore.shared.phones
+        }
+        // Re-check permission every couple of seconds so the window updates as soon as it's granted.
         permissionTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
             guard let self else { return }
-            let granted = AXIsProcessTrusted()
+            let granted = Permissions.isGranted
             if granted != self.accessibilityGranted { self.accessibilityGranted = granted }
         }
     }
@@ -54,15 +75,22 @@ final class AppModel: ObservableObject {
         if startAutomatically { start() }
     }
 
-    // MARK: Start / stop
+    // MARK: Status
 
     var statusText: String {
-        if !isRunning { return "Stopped – your iPhone can't see this Mac" }
-        if connectedPhones > 0 {
-            return connectedPhones == 1 ? "iPhone connected" : "\(connectedPhones) iPhones connected"
+        if !isRunning { return "Off – your iPhone can't see this Mac" }
+        if let name = connectedPhoneNames.first {
+            return connectedPhoneNames.count == 1 ? "Connected to \(name)" : "\(connectedPhoneNames.count) iPhones connected"
         }
-        return isListening ? "Ready – open Mac Remote on your iPhone" : "Starting…"
+        if pairedPhones.isEmpty { return "Ready – pair your iPhone to start" }
+        return isListening ? "Ready – open Couchpad on your iPhone" : "Starting…"
     }
+
+    func isConnected(_ phone: PairedPhone) -> Bool {
+        connectedPhoneIds.contains(phone.id)
+    }
+
+    // MARK: Start / stop
 
     func toggle() {
         isRunning ? stop() : start()
@@ -70,13 +98,21 @@ final class AppModel: ObservableObject {
 
     func start() {
         guard server == nil else { return }
-        if !AXIsProcessTrusted() { requestAccessibility() }
+        if !Permissions.isGranted { Permissions.request() }
 
-        let newServer = RemoteServer(pin: pin, peerToPeer: peerToPeer)
+        let newServer = RemoteServer(peerToPeer: peerToPeer)
         newServer.onStatusChange = { [weak self, weak newServer] in
             guard let self, let newServer, newServer === self.server else { return }
-            self.isListening = newServer.isListening
-            self.connectedPhones = newServer.connectedPhones
+            self.refresh(from: newServer)
+        }
+        newServer.onPaired = { [weak self] name in
+            self?.justPaired = name
+            self?.pairingRequestedBy = nil
+        }
+        newServer.onPairingRequested = { [weak self, weak newServer] name in
+            guard let self, newServer?.pairingWindow == nil else { return }
+            self.pairingRequestedBy = name
+            NSApp.requestUserAttention(.informationalRequest)
         }
         server = newServer
         newServer.start()
@@ -88,7 +124,7 @@ final class AppModel: ObservableObject {
             options: [.userInitiatedAllowingIdleSystemSleep, .latencyCritical],
             reason: "Receiving mouse and keyboard input from iPhone")
 
-        Log.write("▶️ Started – iPhones on your Wi-Fi can now find “\(computerName)”.")
+        Log.write("▶️ On – iPhones on your Wi-Fi can now find “\(computerName)”.")
     }
 
     func stop() {
@@ -97,12 +133,14 @@ final class AppModel: ObservableObject {
         server.stop()
         isRunning = false
         isListening = false
-        connectedPhones = 0
+        connectedPhoneNames = []
+        connectedPhoneIds = []
+        pairing = nil
         if let activityToken {
             ProcessInfo.processInfo.endActivity(activityToken)
             self.activityToken = nil
         }
-        Log.write("⏹ Stopped – this Mac is hidden from iPhones.")
+        Log.write("⏹ Off – this Mac is hidden from iPhones.")
     }
 
     private func restart() {
@@ -110,24 +148,61 @@ final class AppModel: ObservableObject {
         start()
     }
 
-    // MARK: PIN
-
-    func newPin() {
-        pin = PinStore.reset()
-        Log.write("🔑 New PIN: \(pin). Phones will ask for it next time they connect.")
-        if isRunning { restart() }
+    private func refresh(from server: RemoteServer) {
+        isListening = server.isListening
+        connectedPhoneNames = server.connectedPhones
+        connectedPhoneIds = server.connectedPhoneIds
+        if let window = server.pairingWindow {
+            let link = window.link(macId: server.pairings.macId, macName: computerName).url
+            let info = PairingInfo(code: window.code, link: link, expires: window.expires)
+            if pairing != info { pairing = info }
+        } else if pairing != nil {
+            pairing = nil
+        }
     }
 
-    func copyPin() {
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(pin, forType: .string)
+    // MARK: Pairing
+
+    /// Opens pairing and shows the sheet with the QR code and 6-digit code.
+    func beginPairing() {
+        if server == nil { start() }
+        justPaired = nil
+        pairingRequestedBy = nil
+        server?.openPairing()
+        showingPairing = true
+    }
+
+    func endPairing() {
+        server?.closePairing()
+        showingPairing = false
+        justPaired = nil
+    }
+
+    func unpair(_ phone: PairedPhone) {
+        if let server {
+            server.unpair(phone.id)
+        } else {
+            PairingStore.shared.remove(phone.id)
+        }
+        Log.write("🗑 Unpaired “\(phone.name)”.")
+    }
+
+    /// A QR code image for the pairing link.
+    static func qrCode(for url: URL) -> NSImage? {
+        let filter = CIFilter.qrCodeGenerator()
+        filter.message = Data(url.absoluteString.utf8)
+        filter.correctionLevel = "M"
+        guard let output = filter.outputImage?.transformed(by: CGAffineTransform(scaleX: 10, y: 10)) else { return nil }
+        let representation = NSCIImageRep(ciImage: output)
+        let image = NSImage(size: representation.size)
+        image.addRepresentation(representation)
+        return image
     }
 
     // MARK: Permissions & login item
 
     func requestAccessibility() {
-        let promptKey = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String
-        _ = AXIsProcessTrustedWithOptions([promptKey: true] as CFDictionary)
+        Permissions.request()
     }
 
     func openAccessibilitySettings() {

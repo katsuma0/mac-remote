@@ -6,6 +6,8 @@ struct ContentView: View {
     var body: some View {
         if remote.isSessionActive {
             MainView()
+        } else if remote.isPairing {
+            PairingView()
         } else {
             ConnectView()
         }

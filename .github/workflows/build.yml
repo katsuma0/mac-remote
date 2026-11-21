@@ -1,0 +1,58 @@
+name: Build & test
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain
+        run: |
+          xcodebuild -version
+          swift --version
+
+      - name: Security & protocol tests
+        working-directory: MacServer
+        run: swift test
+
+      - name: Command-line Mac server
+        working-directory: MacServer
+        run: swift build -c release
+
+      - name: iPhone app
+        run: |
+          xcodebuild build \
+            -project Couchpad.xcodeproj \
+            -target Couchpad \
+            -configuration Release \
+            -sdk iphonesimulator \
+            CODE_SIGNING_ALLOWED=NO \
+            | tee ios-build.log | grep -E "error:|warning: .*(deprecated|unreachable)|BUILD" || true
+          grep -q "BUILD SUCCEEDED" ios-build.log
+
+      - name: Mac app (App Store build, sandboxed)
+        run: |
+          xcodebuild build \
+            -project Couchpad.xcodeproj \
+            -target "Couchpad Mac" \
+            -configuration Release \
+            CODE_SIGNING_ALLOWED=NO \
+            | tee mac-build.log | grep -E "error:|BUILD" || true
+          grep -q "BUILD SUCCEEDED" mac-build.log
+
+      - name: Upload build logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs
+          path: "*.log"

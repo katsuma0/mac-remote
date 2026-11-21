@@ -1,6 +1,7 @@
 #!/bin/bash
-# Builds "Mac Remote.app" and installs it in /Applications (or ~/Applications).
-# After this you can open Mac Remote from Launchpad, Spotlight or the Dock like any other app.
+# Builds a development copy of "Couchpad.app" (not sandboxed, with the brightness slider)
+# and installs it in /Applications (or ~/Applications).
+# For the Mac App Store version, use Couchpad.xcodeproj instead (see AppStore/SUBMITTING.md).
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -8,25 +9,18 @@ echo "🔨 Building…"
 swift build -c release
 BIN=".build/release/MacRemoteServer"
 
-APP="build/Mac Remote.app"
+APP="build/Couchpad.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-cp "$BIN" "$APP/Contents/MacOS/MacRemote"
+cp "$BIN" "$APP/Contents/MacOS/Couchpad"
 
-# App icon (drawn by the app itself, then converted to .icns)
+# App icon from the asset catalog (the PNGs are already named the way iconutil expects)
 ICON_TMP="$(mktemp -d)"
 ICON_KEY=""
-if "$BIN" --export-icon "$ICON_TMP/icon.png" >/dev/null 2>&1; then
-    ICONSET="$ICON_TMP/AppIcon.iconset"
-    mkdir -p "$ICONSET"
-    for size in 16 32 128 256 512; do
-        sips -z $size $size "$ICON_TMP/icon.png" --out "$ICONSET/icon_${size}x${size}.png" >/dev/null
-        double=$((size * 2))
-        sips -z $double $double "$ICON_TMP/icon.png" --out "$ICONSET/icon_${size}x${size}@2x.png" >/dev/null
-    done
-    if iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/AppIcon.icns" 2>/dev/null; then
-        ICON_KEY="<key>CFBundleIconFile</key><string>AppIcon</string>"
-    fi
+mkdir -p "$ICON_TMP/AppIcon.iconset"
+cp Resources/Assets.xcassets/AppIcon.appiconset/icon_*.png "$ICON_TMP/AppIcon.iconset/"
+if iconutil -c icns "$ICON_TMP/AppIcon.iconset" -o "$APP/Contents/Resources/AppIcon.icns" 2>/dev/null; then
+    ICON_KEY="<key>CFBundleIconFile</key><string>AppIcon</string>"
 fi
 rm -rf "$ICON_TMP"
 
@@ -35,18 +29,18 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>CFBundleName</key><string>Mac Remote</string>
-    <key>CFBundleDisplayName</key><string>Mac Remote</string>
-    <key>CFBundleIdentifier</key><string>com.macremote.mac</string>
-    <key>CFBundleExecutable</key><string>MacRemote</string>
+    <key>CFBundleName</key><string>Couchpad</string>
+    <key>CFBundleDisplayName</key><string>Couchpad</string>
+    <key>CFBundleIdentifier</key><string>app.couchpad.dev</string>
+    <key>CFBundleExecutable</key><string>Couchpad</string>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>1.0</string>
     <key>CFBundleVersion</key><string>1</string>
     <key>LSMinimumSystemVersion</key><string>13.0</string>
     <key>LSApplicationCategoryType</key><string>public.app-category.utilities</string>
     <key>NSHighResolutionCapable</key><true/>
-    <key>NSLocalNetworkUsageDescription</key><string>Mac Remote lets your iPhone find and control this Mac over your local network.</string>
-    <key>NSBonjourServices</key><array><string>_macremote._tcp</string></array>
+    <key>NSLocalNetworkUsageDescription</key><string>Couchpad lets your paired iPhone find and control this Mac over your local network.</string>
+    <key>NSBonjourServices</key><array><string>_couchpad._tcp</string></array>
     $ICON_KEY
 </dict>
 </plist>
@@ -70,9 +64,9 @@ if [ ! -w "$DEST_DIR" ]; then
     DEST_DIR="$HOME/Applications"
     mkdir -p "$DEST_DIR"
 fi
-DEST="$DEST_DIR/Mac Remote.app"
-if pgrep -x MacRemote >/dev/null; then
-    osascript -e 'tell application id "com.macremote.mac" to quit' >/dev/null 2>&1 || true
+DEST="$DEST_DIR/Couchpad.app"
+if pgrep -x Couchpad >/dev/null; then
+    osascript -e 'tell application id "app.couchpad.dev" to quit' >/dev/null 2>&1 || true
     sleep 1
 fi
 rm -rf "$DEST"
@@ -80,8 +74,8 @@ ditto "$APP" "$DEST"
 
 echo
 echo "✅ Installed: $DEST"
-echo "   Opening it now. Next time, open it from Launchpad, Spotlight (⌘ Space → Mac Remote) or the Dock."
+echo "   Opening it now. Next time, open it from Launchpad, Spotlight (⌘ Space → Couchpad) or the Dock."
 echo
-echo "   The first time, macOS asks for Accessibility permission for “Mac Remote”:"
-echo "   System Settings → Privacy & Security → Accessibility → turn on Mac Remote."
+echo "   The first time, macOS asks for Accessibility permission for “Couchpad”:"
+echo "   System Settings → Privacy & Security → Accessibility → turn on Couchpad."
 open "$DEST"

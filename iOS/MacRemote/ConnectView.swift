@@ -1,18 +1,28 @@
 import SwiftUI
 
+/// Shown when not connected: scan a pairing code, or pick a Mac on the network.
 struct ConnectView: View {
     @EnvironmentObject var remote: RemoteConnection
 
-    @State private var pinTarget: DiscoveredMac?
-    @State private var pinText = ""
-    @State private var showPinPrompt = false
     @State private var manualHost = ""
+    @State private var showScanner = false
     @AppStorage("peerToPeer") private var peerToPeer = false
 
     var body: some View {
         NavigationStack {
             List {
                 statusSection
+
+                Section {
+                    Button {
+                        showScanner = true
+                    } label: {
+                        Label("Scan Pairing Code", systemImage: "qrcode.viewfinder")
+                            .font(.headline)
+                    }
+                } footer: {
+                    Text("First time? On your Mac, open Couchpad and click **Pair iPhone…**, then scan the code it shows.")
+                }
 
                 Section {
                     if remote.discovered.isEmpty {
@@ -23,13 +33,20 @@ struct ConnectView: View {
                     }
                     ForEach(remote.discovered) { mac in
                         Button {
-                            tapped(mac)
+                            remote.connect(to: mac)
                         } label: {
                             HStack {
                                 Label(mac.name, systemImage: "laptopcomputer")
+                                    .foregroundStyle(.primary)
                                 Spacer()
-                                if remote.savedPin(for: mac.name) != nil {
-                                    Image(systemName: "key.fill").foregroundStyle(.secondary)
+                                if mac.isPaired {
+                                    Image(systemName: "checkmark.seal.fill")
+                                        .foregroundStyle(.green)
+                                        .accessibilityLabel("Paired")
+                                } else {
+                                    Text("Not paired")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
                                 }
                             }
                         }
@@ -37,7 +54,7 @@ struct ConnectView: View {
                 } header: {
                     Text("Macs nearby")
                 } footer: {
-                    Text("Start MacRemoteServer on your Mac first. Both devices should be on the same Wi-Fi.")
+                    Text("Turn Couchpad on on your Mac. Both devices should be on the same Wi-Fi.")
                 }
 
                 Section {
@@ -46,9 +63,7 @@ struct ConnectView: View {
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                     Button("Connect") {
-                        pinTarget = nil
-                        pinText = remote.savedPin(for: manualHost) ?? ""
-                        showPinPrompt = true
+                        remote.connect(host: manualHost)
                     }
                     .disabled(manualHost.trimmingCharacters(in: .whitespaces).isEmpty)
                 } header: {
@@ -61,7 +76,7 @@ struct ConnectView: View {
                     Toggle("Direct connection (no Wi-Fi network)", isOn: $peerToPeer)
                         .onChange(of: peerToPeer) { _, _ in remote.startBrowsing() }
                 } footer: {
-                    Text("Connects AirDrop-style when your iPhone and Mac aren't on the same Wi-Fi. Start the Mac side with --p2p too. Leave this off at home: it can make the mouse lag.")
+                    Text("Connects AirDrop-style when your iPhone and Mac aren't on the same Wi-Fi. Turn on the same option on the Mac. Leave this off at home: it can make the pointer lag.")
                 }
 
                 if let problem = remote.browseProblem {
@@ -71,14 +86,9 @@ struct ConnectView: View {
                     }
                 }
             }
-            .navigationTitle("Mac Remote")
-            .alert("Enter PIN", isPresented: $showPinPrompt) {
-                TextField("PIN", text: $pinText)
-                    .keyboardType(.numberPad)
-                Button("Connect") { submit() }
-                Button("Cancel", role: .cancel) {}
-            } message: {
-                Text("The PIN is shown on your Mac where MacRemoteServer is running.")
+            .navigationTitle("Couchpad")
+            .sheet(isPresented: $showScanner) {
+                ScanSheet { link in remote.pair(with: link) }
             }
         }
     }
@@ -100,26 +110,6 @@ struct ConnectView: View {
             }
         default:
             EmptyView()
-        }
-    }
-
-    private func tapped(_ mac: DiscoveredMac) {
-        if let pin = remote.savedPin(for: mac.name) {
-            remote.connect(to: mac, pin: pin)
-        } else {
-            pinTarget = mac
-            pinText = ""
-            showPinPrompt = true
-        }
-    }
-
-    private func submit() {
-        let pin = pinText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !pin.isEmpty else { return }
-        if let mac = pinTarget {
-            remote.connect(to: mac, pin: pin)
-        } else {
-            remote.connect(host: manualHost, pin: pin)
         }
     }
 }
