@@ -1,0 +1,21 @@
+// ─────────────────────────────────────────────────────────────────────────────
+//  Couchpad – settings shared by the iPhone and Mac apps.
+//  Fill these in once before building for a real device or the App Store.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Your Apple Developer Team ID (developer.apple.com → Account → Membership details),
+// e.g. ABCDE12345. Leave empty to choose a team in Xcode instead.
+DEVELOPMENT_TEAM =
+
+// Reverse-DNS prefix you own, e.g. com.katsuma. The apps become:
+//   iPhone: $(BUNDLE_ID_PREFIX).couchpad
+//   Mac:    $(BUNDLE_ID_PREFIX).couchpad.mac
+BUNDLE_ID_PREFIX = com.example
+
+// The name under the icon on the Home Screen / in the Dock.
+APP_DISPLAY_NAME = Couchpad
+
+// Bump MARKETING_VERSION for each App Store release (1.0, 1.1, …) and
+// CURRENT_PROJECT_VERSION for every upload (1, 2, 3, …).
+MARKETING_VERSION = 1.0
+CURRENT_PROJECT_VERSION = 1

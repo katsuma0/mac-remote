@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0.1" y1="0" x2="0.9" y2="1">
+      <stop offset="0" stop-color="#1F2A5A"/><stop offset="0.5" stop-color="#1B1646"/><stop offset="1" stop-color="#2A1150"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.25" cy="0.15" r="0.75">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.1"/><stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="pad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.2"/><stop offset="1" stop-color="#FFFFFF" stop-opacity="0.06"/>
+    </linearGradient>
+    <linearGradient id="padEdge" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.45"/><stop offset="1" stop-color="#FFFFFF" stop-opacity="0.1"/>
+    </linearGradient>
+    <filter id="soft" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="24" stdDeviation="28" flood-color="#160F4D" flood-opacity="0.55"/>
+    </filter>
+    <filter id="cursorShadow" x="-40%" y="-40%" width="180%" height="180%">
+      <feDropShadow dx="0" dy="12" stdDeviation="14" flood-color="#160F4D" flood-opacity="0.55"/>
+    </filter>
+  </defs>
+  <rect width="1024" height="1024" fill="url(#bg)"/><rect width="1024" height="1024" fill="url(#glow)"/>
+  <g filter="url(#soft)"><rect x="140" y="186" width="744" height="652" rx="124" fill="url(#pad)"/></g>
+  <rect x="143" y="189" width="738" height="646" rx="121" fill="none" stroke="url(#padEdge)" stroke-width="7"/>
+  <path d="M700 676 C 660 566, 570 518, 492 488" fill="none" stroke="#FFFFFF" stroke-opacity="0.6"
+        stroke-width="18" stroke-linecap="round" stroke-dasharray="2 38"/>
+  <circle cx="712" cy="700" r="104" fill="#FFFFFF" fill-opacity="0.18"/>
+  <circle cx="712" cy="700" r="62" fill="#FFFFFF"/>
+  <g filter="url(#cursorShadow)" transform="translate(-58 -54) scale(1.13)"><path d="M330 300 L330 580 C330 592 344 598 353 590 L418 532 L462 634 C466 643 476 647 485 643 L520 628 C529 624 533 614 529 605 L486 504 L572 504 C584 504 590 490 581 481 L352 286 C343 278 330 284 330 300 Z" fill="#FFFFFF"/></g>
+</svg>

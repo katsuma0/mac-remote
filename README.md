@@ -1,175 +1,101 @@
-# Mac Remote
+<p align="center"><img src="iOS/MacRemote/Assets.xcassets/AppIcon.appiconset/AppIcon.png" width="128" alt="Couchpad icon"></p>
 
-Control your MacBook from your iPhone: trackpad, clicks, scrolling, typing, keyboard shortcuts, volume, media and brightness. Made for using your Mac from bed or the couch.
+# Couchpad
 
-It has two parts:
+Use your iPhone as a trackpad, keyboard and media remote for your Mac – from bed, the couch, or across the room.
 
-| Part | Folder | What it does |
+- **Trackpad:** smooth pointer, tap / double-tap / two-finger right-click, two-finger scroll, hold to drag
+- **Keyboard:** type on the iPhone and it appears on the Mac; Esc, Tab, arrows and common shortcuts
+- **Media:** volume slider and mute, brightness, play/pause/next/previous, lock or sleep the display
+- **Screen Mirroring:** start or stop AirPlay mirroring to your TV from the iPhone
+- **Secure:** only iPhones you pair can control the Mac, and everything is end-to-end encrypted
+
+| Part | Folder | |
 |---|---|---|
-| **MacRemoteServer** | `MacServer/` | A small program that runs on your Mac and does the actual mouse moves and key presses. |
-| **Mac Remote** (iPhone app) | `iOS/` | The remote. Finds your Mac automatically and sends it commands. |
-
-## How they connect
-
-The phone finds the Mac with Bonjour (the system AirDrop and AirPlay use to find devices) and connects over the local network:
-
-- **Same Wi-Fi:** works right away.
-- **No shared Wi-Fi:** peer-to-peer is turned on (Apple's AWDL, the same direct Wi-Fi + Bluetooth link AirDrop uses). If Wi-Fi and Bluetooth are on on both devices, they can usually still find each other.
-- **By IP:** if discovery doesn't work, type the Mac's IP address in the app (port `51515`).
-
-A 6-digit **PIN** shown on the Mac stops other people on your network from connecting. The phone remembers the PIN and reconnects by itself next time.
-
-> Plain Bluetooth isn't used because iOS can't act as a Bluetooth keyboard or mouse for a Mac without special hardware. The Wi-Fi/AWDL route is faster and needs no pairing.
+| iPhone app | `iOS/MacRemote` | target **Couchpad** in `Couchpad.xcodeproj` |
+| Mac app | `MacServer/Sources/MacRemoteServer` | target **Couchpad Mac** (App Store, sandboxed), or `MacServer/make-app.sh` (development build) |
+| Shared security + protocol | `MacServer/Sources/RemoteCore` | used by both, with tests in `MacServer/Tests` |
 
 ---
 
-## 1. Set up the Mac side
+## Quick start (on your own devices)
 
-You need Xcode, or just the Command Line Tools (`xcode-select --install`).
+You need a Mac with **Xcode 16 or newer** and an iPhone with iOS 17+.
 
-### The Mac app (easiest)
+1. **Settings, once:** open `Config/Shared.xcconfig` and set `BUNDLE_ID_PREFIX` to something unique like `com.yourname` (and `DEVELOPMENT_TEAM` if you have a developer account – otherwise pick your Apple ID as the team in Xcode).
+2. Open **`Couchpad.xcodeproj`**.
+3. **Mac:** choose the **Couchpad Mac** scheme → My Mac → **▶︎**. Click **Turn On**, and allow **Accessibility** when asked (System Settings → Privacy & Security → Accessibility → Couchpad).
+4. **iPhone:** choose the **Couchpad** scheme → your iPhone → **▶︎**.
+5. **Pair:** on the Mac click **Pair iPhone…**. On the iPhone tap **Scan Pairing Code** and point it at the QR code (or point the iPhone's Camera app at it, or tap the Mac in the list and type the 6-digit code).
 
-Build and install **Mac Remote.app** once:
+That's it – from now on the iPhone connects to the Mac automatically.
 
-```bash
-cd MacServer
-./make-app.sh
-```
+> With a free Apple ID, apps you install from Xcode stop opening after 7 days; press ▶︎ again to renew. Apps from the App Store don't have this limit.
 
-This puts **Mac Remote** in your Applications folder and opens it. From then on, open it like any app: from Launchpad, Spotlight (⌘ Space → "Mac Remote") or the Dock.
-
-- Click **Connect – make this Mac findable**. Your iPhone can now see the Mac.
-- The window shows your **PIN**, whether an iPhone is connected, and an Activity log.
-- An icon in the **menu bar** (top right) shows it's running. You can close the window and it keeps running there. Use the menu bar icon to stop it, show the window again, or quit.
-- Options: start automatically when the app opens, open at login, allow direct connections without Wi-Fi.
-
-**Give it Accessibility permission.** The first time you click Connect, macOS asks. Turn on **Mac Remote** in System Settings → Privacy & Security → Accessibility. The window shows a warning until it's on.
-
-If you've signed in to Xcode, the script signs the app with your Apple Development certificate, so macOS keeps the permission when you rebuild. Otherwise you may have to turn it off and on again after running `./make-app.sh` again.
-
-After `git pull`, run `./make-app.sh` again to update the app.
-
-### Or run it from Terminal
+### Development build of the Mac app (no Xcode project needed)
 
 ```bash
 cd MacServer
-swift run -c release
+./make-app.sh          # builds Couchpad.app into /Applications and opens it
 ```
 
-It prints something like:
+This version isn't sandboxed, so it also has a 0–100% **brightness slider** and **Sleep Display**, which the App Store version can't offer (the iPhone shows −/+ brightness and Lock Screen instead).
+Or run it in Terminal: `swift run -c release` (add `--pair` to pair, `--help` for options).
 
-```
-🖥  Mac Remote server for “Your MacBook Pro”
-🔑 PIN: 482913
-```
+---
 
-Here it's **Terminal** that needs Accessibility permission: System Settings → Privacy & Security → **Accessibility** → turn on **Terminal**. Then press Ctrl+C and run it again.
+## Publishing on the App Store
 
-If macOS asks whether to allow incoming network connections or local network access, click **Allow**.
+Everything technical is set up: app icons (including iOS dark and tinted variants), privacy manifests, sandbox entitlements, Info.plist permission texts, and a Mac build without private frameworks.
 
-Run only one of these at a time: the app, Terminal, or the login agent below.
+**Follow [`AppStore/SUBMITTING.md`](AppStore/SUBMITTING.md)** – it walks through the Apple Developer account, App Store Connect, uploading and review. Listing text is in [`AppStore/Metadata.md`](AppStore/Metadata.md), review notes in [`AppStore/ReviewNotes.md`](AppStore/ReviewNotes.md) and the privacy policy in [`AppStore/PRIVACY.md`](AppStore/PRIVACY.md).
 
-### Optional: a background service with no window
+---
 
-If you don't want the app, this runs the server invisibly at every login:
+## Security
 
-```bash
-cd MacServer
-./install-agent.sh
-```
+The old version accepted a 6-digit PIN sent in plain text. Couchpad replaces it with pairing and end-to-end encryption (`MacServer/Sources/RemoteCore/SecureSession.swift`):
 
-This builds it, installs it to `~/Library/Application Support/MacRemote/`, starts it in the background and prints your PIN. You'll need to allow **MacRemoteServer** under Accessibility once. If you rebuild later, macOS may need that permission again: remove the old entry with "−" and run the script again.
+- **Pairing only from the Mac's screen.** Pairing is possible only while someone clicks *Pair iPhone…* on the Mac (3 minutes, 5 wrong tries). The QR code carries a 256-bit secret; the 6-digit code is the fallback.
+- **Key exchange.** Both devices do an X25519 key exchange and prove they know the secret with HMAC-SHA256 over everything exchanged. The Mac then gives the iPhone a random 256-bit pairing key, encrypted. The iPhone stores it in the Keychain (this device only); the Mac in its private app storage.
+- **Every connection.** A fresh X25519 exchange; both sides prove they hold the pairing key. A stranger on your Wi-Fi can't control the Mac, and a fake "Mac" can't trick your iPhone into sending it what you type.
+- **Every message.** Session keys are derived per connection (forward secrecy). All commands – over TCP and the fast UDP channel for pointer movement – are sealed with ChaChaPoly and numbered, so they can't be read, changed, replayed or reordered.
+- **Brute-force protection.** Repeated failures lock out new connections for a minute.
+- **Nothing leaves your network.** No accounts, servers, analytics or tracking.
 
-To remove it: `./uninstall-agent.sh`
+Forget a pairing on the iPhone in **Settings → Paired Macs** (swipe left) or on the Mac in **Paired iPhones** (trash icon).
 
-Other options:
-```bash
-swift run -c release MacRemoteServer --show-pin     # print the PIN
-swift run -c release MacRemoteServer --reset-pin    # make a new PIN
-swift run -c release MacRemoteServer --set-pin 1234 # choose your own
-```
+---
 
-## 2. Put the app on your iPhone
+## How it connects
 
-1. Open `iOS/MacRemote.xcodeproj` in **Xcode 16 or newer**.
-2. Click the **MacRemote** project → **MacRemote** target → **Signing & Capabilities**:
-   - **Team:** choose your Apple ID. A free account works: Xcode → Settings → Accounts → "+".
-   - **Bundle Identifier:** change `com.yourname.MacRemote` to something unique, like `com.<yourname>.MacRemote`.
-3. Plug in your iPhone (or use the same Wi-Fi after the first time), pick it at the top of Xcode, and press **Run ▶**.
-4. On the iPhone, the first time only:
-   - Turn on **Developer Mode** if asked: Settings → Privacy & Security → Developer Mode.
-   - Trust your developer certificate: Settings → General → VPN & Device Management.
-   - When the app asks about **Local Network**, tap **Allow**.
-
-With a free Apple ID the app stops working after 7 days. Just press Run in Xcode again to renew it. A paid developer account lasts a year.
-
-## 3. Use it
-
-Open Mac Remote, tap your Mac, and enter the PIN.
-
-Everything is on one screen:
-
-- **Top bar:** your Mac's name, the **Screen Mirroring** button (📺) and **Settings** (⚙︎).
-- **Volume:** mute button and a 0–100% slider.
-- **Brightness:** 0–100% slider and a **sleep display** button. The slider controls the built-in screen. External monitors can't be dimmed this way.
-- **Playback:** previous, play/pause, next.
-- **Trackpad:**
-  - One finger: move the pointer (faster swipes move it farther)
-  - Tap: click. Double-tap: double-click
-  - Two-finger tap: right-click
-  - Two fingers: scroll
-  - Touch and hold, then move: drag (or hold **Left** and move with another finger)
-- **Bottom row:** **Left**, **Double** (double-click), **Right**, and ⌨️ **keyboard**. The keyboard sends what you type straight to the Mac. While it's open, the media controls hide to make room, and a row of extra keys appears (esc, tab, arrows, ⌘C/⌘V/⌘Z, Spotlight…). **More** in that row opens the full key page: paste and send longer text, ⌘⌥⌃⇧ modifiers, page up/down, and shortcuts such as Mission Control, app switcher, zoom and Lock Screen.
-
-**Screen Mirroring** lists the TVs and Apple TVs your Mac can mirror to. Tap one to start, or tap the one marked Mirroring to stop. It works by pressing the Screen Mirroring menu in your Mac's menu bar for you, using the same Accessibility permission as the mouse. Keep its icon in the menu bar: System Settings → Control Center → Screen Mirroring → **Always Show in Menu Bar**. If it stops working after a macOS update, run `swift run -c release MacRemoteServer --dump-menubar Mirroring` and send the output to whoever maintains this.
-
-**Settings:** pointer speed, scroll speed, reverse scrolling, haptics, disconnect.
+The iPhone finds the Mac with Bonjour (`_couchpad._tcp`) on the same Wi-Fi. Pointer movement and scrolling travel over UDP so a lost Wi-Fi packet never makes the pointer stutter; everything else uses TCP. If discovery doesn't work you can connect by IP address (port 51515). An optional direct (AirDrop-style) connection works without a shared network but can add lag.
 
 ## Troubleshooting
 
-- **The Mac doesn't show up in the app:** make sure MacRemoteServer is running and both devices are on the same Wi-Fi. Check iPhone Settings → Privacy & Security → **Local Network** → Mac Remote is on. On a Mac with the firewall on, allow incoming connections for the server. As a fallback, connect by IP.
-- **It connects, but nothing moves:** this is Accessibility permission. Turn it on (see step 1) and restart the server.
-- **Brightness slider is greyed out:** your Mac's display doesn't allow setting brightness this way. This is normal for external monitors.
-- **Screen Mirroring shows an error:** make sure the TV is on and on the same Wi-Fi, and that the Screen Mirroring icon is shown in the Mac's menu bar. Apple sometimes changes the menu bar in new macOS versions; the `--dump-menubar Mirroring` option prints what the server can see.
-- **"Wrong PIN":** run `--show-pin` on the Mac. After 5 wrong tries the server locks for a minute.
-
-## Security notes
-
-- The PIN is checked before any command is accepted, and wrong attempts are rate-limited.
-- Traffic isn't encrypted, so anyone on the *same local network* could in theory see what you type. That's fine at home. Avoid typing passwords through it on public Wi-Fi.
-- The server only runs while you're logged in, and only does what the app sends: mouse, keyboard, media keys, volume, display sleep.
+- **The iPhone doesn't see the Mac:** make sure Couchpad on the Mac is turned on and both are on the same Wi-Fi. Check iPhone Settings → Privacy & Security → **Local Network** → Couchpad is on.
+- **Connected but the pointer doesn't move:** turn on **Couchpad** under System Settings → Privacy & Security → **Accessibility** on the Mac. (In the App Store version macOS may also ask to allow it to control the computer.)
+- **"Doesn't recognize this iPhone":** the pairing was removed on the Mac; pair again.
+- **Screen Mirroring can't find the menu:** keep the Screen Mirroring icon in the menu bar (System Settings → Control Center → Screen Mirroring → *Always Show in Menu Bar*). `swift run -c release MacRemoteServer --dump-menubar Mirroring` shows what Couchpad can see.
+- **Laggy pointer:** stay on the same 5 GHz Wi-Fi with *Direct connection* off.
 
 ## Project layout
 
 ```
-MacServer/                      Swift package for the Mac
-  Sources/MacRemoteServer/
-    Entry.swift                 starts the app, or the command-line server when run from Terminal
-    MacRemoteApp.swift          the Mac app: window, menu bar icon, app icon
-    AppModel.swift              the app's state: start/stop, PIN, permissions, login item
-    PinStore.swift, Log.swift   PIN file and log shared by the app and the command line
-    RemoteServer.swift          Bonjour + TCP listener, PIN check, command dispatch
-    InputController.swift       mouse / keyboard / media-key events (CGEvent)
-    SystemActions.swift         volume (osascript), display sleep (pmset)
-    Brightness.swift            built-in display brightness (DisplayServices)
-    Mirroring.swift             AirPlay screen mirroring via the menu bar (Accessibility API)
-    MenuBarInspector.swift      --dump-menubar diagnostic
-    Protocol.swift              wire format (same file as the iOS one)
-  make-app.sh                   builds and installs Mac Remote.app
-  install-agent.sh / uninstall-agent.sh
+Couchpad.xcodeproj           iPhone app + Mac App Store app
+Config/Shared.xcconfig       team id, bundle id prefix, version (edit this)
+AppStore/                    submission guide, listing text, review notes, privacy policy
+Design/Icon/                 icon sources (SVG) – render with `node render.js in.svg out.png 1024`
 iOS/
-  MacRemote.xcodeproj
-  Info.plist                    Local Network + Bonjour permission strings
-  project.yml                   backup XcodeGen spec
-  MacRemote/
-    MacRemoteApp.swift, ContentView.swift
-    RemoteConnection.swift      discovery, connection, auto-reconnect, motion coalescing
-    ConnectView.swift           pick a Mac / enter PIN
-    RemoteScreen.swift          main screen: media controls, trackpad, buttons, Screen Mirroring sheet
-    Trackpad.swift              multi-touch trackpad + mouse buttons
-    KeyCapture.swift            live keyboard → Mac
-    KeysScreen.swift, SettingsScreen.swift
-    Protocol.swift
+  Info.plist                 permission texts, Bonjour service, couchpad:// link
+  MacRemote/                 iPhone app (SwiftUI) + Assets.xcassets + PrivacyInfo.xcprivacy
+MacServer/
+  Package.swift              command-line / development build and tests
+  Sources/RemoteCore/        protocol, pairing and encryption (shared)
+  Sources/MacRemoteServer/   Mac app: server, input, volume, brightness, mirroring, window, menu bar
+  Resources/                 Mac asset catalog + privacy manifest
+  AppStore/                  Mac Info.plist + sandbox entitlements
+  Tests/RemoteCoreTests/     security tests
+  make-app.sh                development Couchpad.app
+.github/workflows/build.yml  CI: tests + builds + App Store checks on macOS
 ```
-
-The protocol is newline-separated JSON over TCP, e.g. `{"t":"move","dx":3.5,"dy":-1}`, `{"t":"key","s":"c","m":["cmd"]}`, `{"t":"media","s":"volup"}`.

@@ -6,6 +6,8 @@ struct SettingsScreen: View {
     @AppStorage("scrollSpeed") private var scrollSpeed = 1.0
     @AppStorage("invertScroll") private var invertScroll = false
     @AppStorage("haptics") private var haptics = true
+    @AppStorage("deviceName") private var deviceName = ""
+    @State private var pairedMacs = PhonePairings.all
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -33,14 +35,45 @@ struct SettingsScreen: View {
                 }
 
                 Section {
-                    Button("Forget saved PINs", role: .destructive) { remote.forgetAllPins() }
+                    ForEach(pairedMacs) { mac in
+                        Label(mac.name, systemImage: "laptopcomputer")
+                    }
+                    .onDelete { offsets in
+                        for index in offsets { remote.forget(pairedMacs[index]) }
+                        pairedMacs = PhonePairings.all
+                    }
+                    if pairedMacs.isEmpty {
+                        Text("No paired Macs.").foregroundStyle(.secondary)
+                    }
+                } header: {
+                    Text("Paired Macs")
                 } footer: {
-                    Text("The app remembers the PIN for each Mac and reconnects automatically when it opens.")
+                    Text("Swipe left to forget a Mac. You'll need to pair again to use it.")
                 }
+
+                Section {
+                    TextField(UIDevice.current.name, text: $deviceName)
+                        .textInputAutocapitalization(.words)
+                } header: {
+                    Text("This iPhone's name")
+                } footer: {
+                    Text("Shown on your Mac under Paired iPhones.")
+                }
+
+                Section("Security") {
+                    Label("Only iPhones you pair on the Mac can control it.", systemImage: "lock.shield")
+                    Label("Everything you send is end-to-end encrypted.", systemImage: "lock")
+                    Label("No accounts, no tracking. Nothing leaves your network.", systemImage: "hand.raised")
+                }
+                .font(.footnote)
 
                 Section("Gestures") {
                     Text("• Move one finger to move the pointer\n• Tap to click, double-tap to double-click\n• Tap with two fingers to right-click\n• Move two fingers to scroll\n• Touch and hold, then move, to drag\n• Or hold the Left button and move with another finger\n• Double: double-clicks where the pointer is")
                         .font(.footnote)
+                }
+
+                Section {
+                    LabeledContent("Version", value: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "")
                 }
             }
             .navigationTitle("Settings")

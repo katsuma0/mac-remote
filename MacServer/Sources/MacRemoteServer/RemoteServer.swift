@@ -1,42 +1,70 @@
+import CryptoKit
 import Foundation
 import Network
 import SystemConfiguration
+#if canImport(RemoteCore)
+import RemoteCore
+#endif
 
-/// Listens for the iPhone app on the local network (Wi-Fi, Ethernet, or peer-to-peer Wi-Fi/AWDL)
-/// and advertises itself with Bonjour so the phone finds it automatically.
-/// Everything runs on the main queue.
+/// Listens for the iPhone app on the local network and advertises itself with Bonjour.
+///
+/// Only paired iPhones can do anything: every connection starts with the handshake in
+/// SecureSession.swift (pairing while "Pair iPhone" is open, otherwise proof of the pairing key),
+/// and everything after it is encrypted. Everything runs on the main queue.
 final class RemoteServer {
-    let pin: String
     let input = InputController()
+    let pairings: PairingStore
+
     static var localComputerName: String {
         (SCDynamicStoreCopyComputerName(nil, nil) as String?) ?? Host.current().localizedName ?? "Mac"
     }
     let computerName: String = RemoteServer.localComputerName
 
     /// Peer-to-peer Wi-Fi (AWDL, what AirDrop uses) lets the phone connect with no shared network,
-    /// but it makes the Wi-Fi radio hop channels and adds latency spikes, so it is opt-in (--p2p).
+    /// but it makes the Wi-Fi radio hop channels and adds latency spikes, so it is opt-in.
     let peerToPeer: Bool
 
+    /// Called on the main queue when listening starts/stops, a phone connects/disconnects, or pairing changes.
+    var onStatusChange: (() -> Void)?
+    /// Called on the main queue with the iPhone's name when pairing succeeds.
+    var onPaired: ((String) -> Void)?
+    /// Called on the main queue when an unpaired iPhone tries to connect (its name).
+    var onPairingRequested: ((String) -> Void)?
+
+    private(set) var isListening = false
+    private(set) var pairingWindow: PairingWindow?
+
+    private var stopped = false
     private var listener: NWListener?
     private var udpListener: NWListener?
     private var udpFlows: [ObjectIdentifier: NWConnection] = [:]
     private var sessions: [ObjectIdentifier: ClientSession] = [:]
 
-    // Brute-force protection for the PIN.
-    /// Called on the main queue when listening starts/stops or a phone connects/disconnects.
-    var onStatusChange: (() -> Void)?
-    private(set) var isListening = false
-    private var stopped = false
-
-    var connectedPhones: Int { sessions.values.filter { $0.authenticated }.count }
-
-    private var failedAttempts = 0
+    // Brute-force protection: after too many failed handshakes, refuse new ones for a minute.
+    private var recentFailures: [Date] = []
     private var lockedUntil = Date.distantPast
 
-    init(pin: String, peerToPeer: Bool) {
-        self.pin = pin
+    init(peerToPeer: Bool, pairings: PairingStore = .shared) {
         self.peerToPeer = peerToPeer
+        self.pairings = pairings
     }
+
+    var connectedPhones: [String] {
+        sessions.values.filter(\.isEstablished).map(\.phoneName)
+    }
+
+    var connectedPhoneIds: Set<String> {
+        Set(sessions.values.filter(\.isEstablished).compactMap(\.phoneId))
+    }
+
+    var capabilities: [String] {
+        var list = [Capability.screenMirroring]
+        if Brightness.isSupported { list.append(Capability.brightnessSlider) }
+        if SystemActions.canSleepDisplay { list.append(Capability.sleepDisplay) }
+        return list
+    }
+
+    // MARK: Network parameters
 
     func parameters() -> NWParameters {
         let tcp = NWProtocolTCP.Options()
@@ -60,115 +88,18 @@ final class RemoteServer {
 
     var udpPort: UInt16? { udpListener?.port?.rawValue }
 
-    // MARK: UDP (mouse movement)
-
-    /// Mouse movement uses UDP: a lost packet is simply skipped instead of stalling everything
-    /// behind it until TCP retransmits it (which feels like 200 ms+ of lag on Wi-Fi).
-    /// Stops listening and disconnects every phone. A stopped server can't be restarted; make a new one.
-    func stop() {
-        stopped = true
-        listener?.cancel()
-        listener = nil
-        udpListener?.cancel()
-        udpListener = nil
-        for session in Array(sessions.values) {
-            session.close(reason: "server stopped")
+    /// Bonjour TXT record with this Mac's id, so a scanned pairing QR code finds the right Mac.
+    private var txtRecord: Data {
+        var data = Data()
+        for entry in ["v=\(couchpadProtocolVersion)", "id=\(pairings.macId)"] {
+            let bytes = Array(entry.utf8)
+            data.append(UInt8(bytes.count))
+            data.append(contentsOf: bytes)
         }
-        udpFlows.values.forEach { $0.cancel() }
-        udpFlows.removeAll()
-        input.releaseAll()
-        isListening = false
-        onStatusChange?()
+        return data
     }
 
-    func startUDP(port: UInt16? = RemoteConstants.defaultPort) {
-        guard !stopped else { return }
-        let newListener: NWListener
-        do {
-            if let port, let nwPort = NWEndpoint.Port(rawValue: port) {
-                newListener = try NWListener(using: udpParameters(), on: nwPort)
-            } else {
-                newListener = try NWListener(using: udpParameters())
-            }
-        } catch {
-            Log.write("⚠️  UDP unavailable (\(error)); mouse movement will use TCP.")
-            return
-        }
-        newListener.stateUpdateHandler = { [weak self, weak newListener] state in
-            guard let self, let newListener, newListener === self.udpListener else { return }
-            switch state {
-            case .ready:
-                Log.write("✅ Fast mouse channel (UDP) on port \(newListener.port?.rawValue ?? 0)")
-            case .failed(let error):
-                newListener.cancel()
-                self.udpListener = nil
-                if case .posix(let code) = error, code == .EADDRINUSE, port != nil {
-                    self.startUDP(port: nil)
-                } else {
-                    Log.write("⚠️  UDP listener failed (\(error)); retrying.")
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
-                        guard let self, !self.stopped else { return }
-                        self.startUDP(port: port)
-                    }
-                }
-            default:
-                break
-            }
-        }
-        newListener.newConnectionHandler = { [weak self] flow in
-            guard let self else { flow.cancel(); return }
-            self.udpFlows[ObjectIdentifier(flow)] = flow
-            flow.stateUpdateHandler = { [weak self, weak flow] state in
-                guard let flow else { return }
-                switch state {
-                case .failed, .cancelled:
-                    self?.udpFlows[ObjectIdentifier(flow)] = nil
-                default:
-                    break
-                }
-            }
-            flow.start(queue: .main)
-            self.receiveUDP(on: flow)
-        }
-        udpListener = newListener
-        newListener.start(queue: .main)
-    }
-
-    private func receiveUDP(on flow: NWConnection) {
-        flow.receiveMessage { [weak self, weak flow] data, _, _, error in
-            guard let self, let flow else { return }
-            if let data, !data.isEmpty { self.handleDatagram(data, from: flow) }
-            if error == nil {
-                self.receiveUDP(on: flow)
-            } else {
-                flow.cancel()
-            }
-        }
-    }
-
-    private func handleDatagram(_ data: Data, from flow: NWConnection) {
-        guard let cmd = try? JSONDecoder().decode(RemoteCommand.self, from: data),
-              let token = cmd.k,
-              let session = sessions.values.first(where: { $0.authenticated && $0.token == token })
-        else { return }   // unknown or unauthenticated sender: ignore
-
-        switch cmd.t {
-        case "hello":
-            // Lets the phone confirm UDP actually gets through (firewalls) before relying on it.
-            if let reply = try? JSONEncoder().encode(RemoteCommand(t: "hello_ok")) {
-                flow.send(content: reply, completion: .idempotent)
-            }
-        case "move", "scroll":
-            // Drop packets that arrive after a newer one (Wi-Fi can reorder); deltas are small.
-            if let q = cmd.q {
-                if q <= session.lastUDPSequence && session.lastUDPSequence - q < 1_000_000 { return }
-                session.lastUDPSequence = q
-            }
-            perform(cmd, from: session)
-        default:
-            break
-        }
-    }
+    // MARK: Start / stop
 
     func start(port: UInt16? = RemoteConstants.defaultPort) {
         guard !stopped else { return }
@@ -185,7 +116,8 @@ final class RemoteServer {
             return
         }
 
-        newListener.service = NWListener.Service(name: computerName, type: RemoteConstants.serviceType)
+        newListener.service = NWListener.Service(name: computerName, type: RemoteConstants.serviceType,
+                                                 domain: nil, txtRecord: txtRecord)
 
         newListener.stateUpdateHandler = { [weak self, weak newListener] state in
             guard let self, let newListener, newListener === self.listener else { return }
@@ -230,6 +162,90 @@ final class RemoteServer {
         }
     }
 
+    /// Stops listening and disconnects every phone. A stopped server can't be restarted; make a new one.
+    func stop() {
+        stopped = true
+        listener?.cancel()
+        listener = nil
+        udpListener?.cancel()
+        udpListener = nil
+        for session in Array(sessions.values) {
+            session.close(reason: "server stopped")
+        }
+        udpFlows.values.forEach { $0.cancel() }
+        udpFlows.removeAll()
+        input.releaseAll()
+        pairingWindow = nil
+        isListening = false
+        onStatusChange?()
+    }
+
+    // MARK: Pairing
+
+    /// Opens pairing for a few minutes. Returns the window (QR secret + code) to show on screen.
+    @discardableResult
+    func openPairing() -> PairingWindow {
+        let window = PairingWindow()
+        pairingWindow = window
+        Log.write("🔗 Pairing is open for \(Int(PairingWindow.duration / 60)) minutes.")
+        onStatusChange?()
+        DispatchQueue.main.asyncAfter(deadline: .now() + PairingWindow.duration + 0.5) { [weak self, weak window] in
+            guard let self, let window, window === self.pairingWindow else { return }
+            self.pairingWindow = nil
+            Log.write("🔗 Pairing closed (timed out).")
+            self.onStatusChange?()
+        }
+        return window
+    }
+
+    func closePairing() {
+        guard pairingWindow != nil else { return }
+        pairingWindow = nil
+        onStatusChange?()
+    }
+
+    /// Unpairs an iPhone and disconnects it right away.
+    func unpair(_ phoneId: String) {
+        pairings.remove(phoneId)
+        for session in Array(sessions.values) where session.phoneId == phoneId {
+            session.close(reason: "unpaired on this Mac")
+        }
+    }
+
+    fileprivate func pairingFailedAttempt() {
+        guard let window = pairingWindow else { return }
+        window.recordFailure()
+        recordFailure()
+        if !window.isOpen {
+            pairingWindow = nil
+            Log.write("🔒 Too many wrong pairing codes – pairing closed. Click “Pair iPhone” to try again.")
+            onStatusChange?()
+        }
+    }
+
+    fileprivate func pairingSucceeded(phoneName: String) {
+        pairingWindow = nil
+        Log.write("✅ Paired with “\(phoneName)”.")
+        onPaired?(phoneName)
+        onStatusChange?()
+    }
+
+    // MARK: Brute-force protection
+
+    fileprivate var acceptsHandshakes: Bool { Date() >= lockedUntil }
+
+    fileprivate func recordFailure() {
+        let now = Date()
+        recentFailures = recentFailures.filter { now.timeIntervalSince($0) < 60 } + [now]
+        if recentFailures.count >= 10 {
+            lockedUntil = now.addingTimeInterval(60)
+            recentFailures.removeAll()
+            Log.write("🔒 Too many failed connection attempts – refusing new connections for a minute.")
+        }
+    }
+
+    // MARK: Connections
+
     private func accept(_ connection: NWConnection) {
         let session = ClientSession(connection: connection, server: self)
         sessions[ObjectIdentifier(session)] = session
@@ -238,7 +254,7 @@ final class RemoteServer {
 
     fileprivate func remove(_ session: ClientSession) {
         sessions[ObjectIdentifier(session)] = nil
-        if !sessions.values.contains(where: { $0.authenticated }) {
+        if !sessions.values.contains(where: \.isEstablished) {
             input.releaseAll()
             udpFlows.values.forEach { $0.cancel() }
             udpFlows.removeAll()
@@ -246,22 +262,105 @@ final class RemoteServer {
         onStatusChange?()
     }
 
-    enum PinResult { case ok, wrong, locked }
-
-    fileprivate func checkPin(_ attempt: String?) -> PinResult {
-        if Date() < lockedUntil { return .locked }
-        if attempt == pin {
-            failedAttempts = 0
-            return .ok
-        }
-        failedAttempts += 1
-        if failedAttempts >= 5 {
-            failedAttempts = 0
-            lockedUntil = Date().addingTimeInterval(60)
-            Log.write("🔒 Too many wrong PINs, locking for 60 seconds.")
-        }
-        return .wrong
+    fileprivate func sessionEstablished(_ session: ClientSession) {
+        onStatusChange?()
     }
+
+    // MARK: UDP (mouse movement)
+
+    /// Mouse movement uses UDP: a lost packet is simply skipped instead of stalling everything
+    /// behind it until TCP retransmits it. Datagrams are encrypted like everything else.
+    func startUDP(port: UInt16? = RemoteConstants.defaultPort) {
+        guard !stopped else { return }
+        let newListener: NWListener
+        do {
+            if let port, let nwPort = NWEndpoint.Port(rawValue: port) {
+                newListener = try NWListener(using: udpParameters(), on: nwPort)
+            } else {
+                newListener = try NWListener(using: udpParameters())
+            }
+        } catch {
+            Log.write("⚠️  UDP unavailable (\(error)); mouse movement will use TCP.")
+            return
+        }
+        newListener.stateUpdateHandler = { [weak self, weak newListener] state in
+            guard let self, let newListener, newListener === self.udpListener else { return }
+            switch state {
+            case .ready:
+                Log.write("✅ Fast mouse channel (UDP) on port \(newListener.port?.rawValue ?? 0)")
+            case .failed(let error):
+                newListener.cancel()
+                self.udpListener = nil
+                if case .posix(let code) = error, code == .EADDRINUSE, port != nil {
+                    self.startUDP(port: nil)
+                } else {
+                    Log.write("⚠️  UDP listener failed (\(error)); retrying.")
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
+                        guard let self, !self.stopped else { return }
+                        self.startUDP(port: port)
+                    }
+                }
+            default:
+                break
+            }
+        }
+        newListener.newConnectionHandler = { [weak self] flow in
+            guard let self, self.sessions.values.contains(where: \.isEstablished) else {
+                flow.cancel()   // nobody is connected: ignore stray datagrams
+                return
+            }
+            self.udpFlows[ObjectIdentifier(flow)] = flow
+            flow.stateUpdateHandler = { [weak self, weak flow] state in
+                guard let flow else { return }
+                switch state {
+                case .failed, .cancelled:
+                    self?.udpFlows[ObjectIdentifier(flow)] = nil
+                default:
+                    break
+                }
+            }
+            flow.start(queue: .main)
+            self.receiveUDP(on: flow)
+        }
+        udpListener = newListener
+        newListener.start(queue: .main)
+    }
+
+    private func receiveUDP(on flow: NWConnection) {
+        flow.receiveMessage { [weak self, weak flow] data, _, _, error in
+            guard let self, let flow else { return }
+            if let data, !data.isEmpty { self.handleDatagram(data, from: flow) }
+            if error == nil {
+                self.receiveUDP(on: flow)
+            } else {
+                flow.cancel()
+            }
+        }
+    }
+
+    /// Datagram = 8-byte session id + sealed command.
+    private func handleDatagram(_ data: Data, from flow: NWConnection) {
+        guard data.count > 8 else { return }
+        let sessionId = Data(data.prefix(8))
+        guard let session = sessions.values.first(where: { $0.isEstablished && $0.udpSessionId == sessionId }),
+              let channel = session.udpChannel,
+              let plaintext = try? channel.open(Data(data.dropFirst(8))),
+              let cmd = try? JSONDecoder().decode(RemoteCommand.self, from: plaintext) else { return }
+
+        switch cmd.t {
+        case "hello":
+            // Lets the phone confirm UDP gets through (firewalls) before relying on it.
+            if let reply = try? channel.seal(JSONEncoder().encode(RemoteCommand(t: "hello_ok"))) {
+                flow.send(content: reply, completion: .idempotent)
+            }
+        case "move", "scroll":
+            perform(cmd, from: session)
+        default:
+            break
+        }
+    }
+
+    // MARK: Commands
 
     fileprivate func perform(_ cmd: RemoteCommand, from session: ClientSession) {
         switch cmd.t {
@@ -295,11 +394,9 @@ final class RemoteServer {
                 }
             }
         case "volume":
-            SystemActions.setVolume(Int((cmd.v ?? 0).rounded()))
+            SystemVolume.setVolume(Int((cmd.v ?? 0).rounded()))
         case "brightness":
-            if !Brightness.set((cmd.v ?? 0) / 100) {
-                session.send(RemoteCommand(t: "brightness", e: "Brightness can't be set on this Mac's display."))
-            }
+            Brightness.set((cmd.v ?? 0) / 100)
         case "mirror":
             let action = Mirroring.Action(rawValue: cmd.s ?? "list") ?? .list
             Mirroring.perform(action, name: cmd.m?.first) { result in
@@ -324,31 +421,40 @@ final class RemoteServer {
     }
 
     fileprivate func sendVolume(to session: ClientSession) {
-        SystemActions.getVolume { volume, muted in
-            var msg = RemoteCommand(t: "volume", s: muted ? "muted" : "unmuted")
-            if let volume { msg.v = Double(volume) }
-            session.send(msg)
-        }
+        var message = RemoteCommand(t: "volume", s: SystemVolume.isMuted ? "muted" : "unmuted")
+        if let volume = SystemVolume.volume { message.v = Double(volume) }
+        session.send(message)
     }
 
     fileprivate func sendBrightness(to session: ClientSession) {
-        if let value = Brightness.current() {
-            session.send(RemoteCommand(t: "brightness", v: (value * 100).rounded()))
-        } else {
-            session.send(RemoteCommand(t: "brightness", e: "Brightness can't be read on this Mac's display."))
-        }
+        guard let value = Brightness.current() else { return }
+        session.send(RemoteCommand(t: "brightness", v: (value * 100).rounded()))
     }
 
     // MARK: - One connected phone
 
     fileprivate final class ClientSession {
+        private enum Phase {
+            case awaitingHello
+            case handshaking(MacHandshake)
+            case established(SecureChannel)
+        }
+
         let connection: NWConnection
         weak var server: RemoteServer?
-        private(set) var authenticated = false
-        let token = UUID().uuidString
-        var lastUDPSequence = -1
+        private(set) var phoneId: String?
+        private(set) var phoneName = "iPhone"
+        private(set) var udpChannel: SecureChannel?
+        let udpSessionId = Data((0..<8).map { _ in UInt8.random(in: 0...255) })
+
+        private var phase = Phase.awaitingHello
         private var buffer = Data()
         private var closed = false
+
+        var isEstablished: Bool {
+            if case .established = phase { return true }
+            return false
+        }
 
         init(connection: NWConnection, server: RemoteServer) {
             self.connection = connection
@@ -371,6 +477,11 @@ final class RemoteServer {
             }
             connection.start(queue: .main)
             receive()
+            // Pairing can take a minute (finding the QR code, typing the code); then give up.
+            DispatchQueue.main.asyncAfter(deadline: .now() + PairingWindow.duration + 30) { [weak self] in
+                guard let self, !self.isEstablished else { return }
+                self.close(reason: "handshake timed out")
+            }
         }
 
         private func receive() {
@@ -384,7 +495,7 @@ final class RemoteServer {
                     self.close(reason: "receive error: \(error)")
                 } else if isComplete {
                     self.close(reason: "phone closed the connection")
-                } else {
+                } else if !self.closed {
                     self.receive()
                 }
             }
@@ -394,56 +505,142 @@ final class RemoteServer {
             while !closed, let newline = buffer.firstIndex(of: 0x0A) {
                 let line = buffer.subdata(in: buffer.startIndex..<newline)
                 buffer.removeSubrange(buffer.startIndex...newline)
-                handle(line)
+                if !line.isEmpty { handle(line) }
             }
-            if buffer.count > 1_000_000 { close(reason: "too much data") }   // garbage / abuse
+            if buffer.count > RemoteConstants.maxLineLength { close(reason: "too much data") }
         }
 
         private func handle(_ line: Data) {
-            guard !line.isEmpty,
-                  let cmd = try? JSONDecoder().decode(RemoteCommand.self, from: line),
-                  let server else { return }
-
-            if !authenticated {
-                guard cmd.t == "auth" else { return }
-                switch server.checkPin(cmd.pin) {
-                case .ok:
-                    authenticated = true
-                    Log.write("📱 Phone connected (\(peer))")
-                    server.onStatusChange?()
-                    var ok = RemoteCommand(t: "auth_ok", s: server.computerName, k: token)
-                    if let udpPort = server.udpPort { ok.p = Int(udpPort) }
-                    send(ok)
-                    server.sendVolume(to: self)
-                    server.sendBrightness(to: self)
-                case .wrong:
-                    Log.write("⚠️  Wrong PIN from \(peer)")
-                    send(RemoteCommand(t: "auth_fail", s: "Wrong PIN"))
-                    closeSoon()
-                case .locked:
-                    send(RemoteCommand(t: "auth_fail", s: "Too many wrong PINs. Try again in a minute."))
-                    closeSoon()
+            guard let server else { return }
+            switch phase {
+            case .awaitingHello:
+                guard let message = try? JSONDecoder().decode(HandshakeMessage.self, from: line),
+                      message.t == "hello" else {
+                    // Old app versions or random traffic.
+                    sendPlain(HandshakeMessage(t: "error", e: "Please update Couchpad on your iPhone."))
+                    closeSoon(reason: "not a Couchpad hello")
+                    return
                 }
-                return
+                guard server.acceptsHandshakes else {
+                    sendPlain(HandshakeMessage(t: "error", e: "Too many failed attempts. Try again in a minute."))
+                    closeSoon(reason: "locked out")
+                    return
+                }
+                let handshake = MacHandshake(macId: server.pairings.macId, macName: server.computerName)
+                do {
+                    let reply = try handshake.receive(phoneHello: message, longTermKey: { server.pairings.key(for: $0) })
+                    phoneId = handshake.phoneId
+                    phoneName = handshake.phoneName ?? "iPhone"
+                    phase = .handshaking(handshake)
+                    sendPlain(reply)
+                    if !handshake.phoneIsKnown {
+                        Log.write("📱 “\(phoneName)” wants to pair.\(server.pairingWindow == nil ? " Click “Pair iPhone” to allow it." : "")")
+                        server.onPairingRequested?(phoneName)
+                    }
+                } catch {
+                    reject(error)
+                }
+
+            case .handshaking(let handshake):
+                guard let message = try? JSONDecoder().decode(HandshakeMessage.self, from: line) else {
+                    close(reason: "bad handshake message")
+                    return
+                }
+                switch message.t {
+                case "auth":
+                    do {
+                        establish(try handshake.receive(auth: message))
+                    } catch {
+                        server.recordFailure()
+                        reject(error)
+                    }
+                case "pair":
+                    do {
+                        let result = try handshake.receive(pair: message, secret: { server.pairingWindow?.secret(for: $0) })
+                        guard let phoneId else { return close(reason: "no phone id") }
+                        server.pairings.add(phoneId: phoneId, name: phoneName, key: result.longTermKey)
+                        sendPlain(result.reply)
+                        server.pairingSucceeded(phoneName: phoneName)
+                        establish(result.keys)
+                    } catch HandshakeError.notAuthentic {
+                        Log.write("⚠️  Wrong pairing code from “\(phoneName)”.")
+                        server.pairingFailedAttempt()
+                        sendPlain(HandshakeMessage(t: "pair_failed", e: "That code didn't match. Check the code on your Mac and try again."))
+                        closeSoon(reason: "wrong pairing code")
+                    } catch {
+                        reject(error)
+                    }
+                default:
+                    close(reason: "unexpected \(message.t)")
+                }
+
+            case .established(let channel):
+                guard let sealed = Data(base64Encoded: line),
+                      let plaintext = try? channel.open(sealed),
+                      let command = try? JSONDecoder().decode(RemoteCommand.self, from: plaintext) else {
+                    close(reason: "message failed decryption")
+                    return
+                }
+                server.perform(command, from: self)
             }
-            server.perform(cmd, from: self)
         }
 
-        func send(_ cmd: RemoteCommand) {
-            guard !closed, var data = try? JSONEncoder().encode(cmd) else { return }
+        private func establish(_ keys: SessionKeys) {
+            guard let server else { return }
+            phase = .established(SecureChannel(sendKey: keys.tcpSend, receiveKey: keys.tcpReceive, ordering: .strict))
+            udpChannel = SecureChannel(sendKey: keys.udpSend, receiveKey: keys.udpReceive, ordering: .increasing)
+            if let phoneId { server.pairings.markSeen(phoneId, name: phoneName) }
+            Log.write("📱 “\(phoneName)” connected (\(peer)) – encrypted.")
+
+            var ok = RemoteCommand(t: "auth_ok", s: server.computerName, m: server.capabilities,
+                                   k: udpSessionId.map { String(format: "%02x", $0) }.joined())
+            if let port = server.udpPort { ok.p = Int(port) }
+            send(ok)
+            server.sendVolume(to: self)
+            server.sendBrightness(to: self)
+            server.sessionEstablished(self)
+        }
+
+        private func reject(_ error: Error) {
+            let text: String
+            switch error {
+            case HandshakeError.pairingRejected(let reason):
+                text = reason
+            case HandshakeError.notAuthentic:
+                text = "This iPhone isn't paired with this Mac anymore. Pair again."
+            default:
+                text = "Couldn't connect securely. Update Couchpad on both devices and try again."
+            }
+            Log.write("⚠️  Refused “\(phoneName)” (\(peer)): \(error)")
+            sendPlain(HandshakeMessage(t: "error", e: text))
+            closeSoon(reason: "handshake failed")
+        }
+
+        /// Sends an encrypted command. Does nothing until the handshake has finished.
+        func send(_ command: RemoteCommand) {
+            guard !closed, case .established(let channel) = phase,
+                  let json = try? JSONEncoder().encode(command),
+                  let sealed = try? channel.seal(json) else { return }
+            var line = Data(sealed.base64EncodedString().utf8)
+            line.append(0x0A)
+            connection.send(content: line, completion: .contentProcessed { _ in })
+        }
+
+        private func sendPlain(_ message: HandshakeMessage) {
+            guard !closed, var data = try? JSONEncoder().encode(message) else { return }
             data.append(0x0A)
             connection.send(content: data, completion: .contentProcessed { _ in })
         }
 
-        private func closeSoon() {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in self?.close(reason: "wrong PIN") }
+        private func closeSoon(reason: String) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in self?.close(reason: reason) }
         }
 
         func close(reason: String = "") {
             guard !closed else { return }
             closed = true
-            if authenticated {
-                Log.write("👋 Phone disconnected (\(peer))\(reason.isEmpty ? "" : " – \(reason)")")
+            if isEstablished {
+                Log.write("👋 “\(phoneName)” disconnected\(reason.isEmpty ? "" : " – \(reason)")")
             }
             connection.stateUpdateHandler = nil
             connection.cancel()

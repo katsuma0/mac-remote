@@ -7,6 +7,16 @@ import Foundation
 /// brightness keys and Control Center slider use. It's loaded at runtime: if it's missing on some
 /// macOS version, `isSupported` is false and the phone shows that instead of crashing.
 /// External monitors aren't supported (they need DDC over the cable).
+#if APP_STORE
+/// App Store build: private frameworks aren't allowed, so there's no brightness slider.
+/// The phone shows brightness −/+ buttons instead (the brightness keys work everywhere).
+enum Brightness {
+    static var isSupported: Bool { false }
+    static func current() -> Double? { nil }
+    @discardableResult
+    static func set(_ value: Double) -> Bool { false }
+}
+#else
 enum Brightness {
     private typealias GetFunction = @convention(c) (CGDirectDisplayID, UnsafeMutablePointer<Float>) -> Int32
     private typealias SetFunction = @convention(c) (CGDirectDisplayID, Float) -> Int32
@@ -51,3 +61,4 @@ enum Brightness {
         return setFunction(display, clamped) == 0
     }
 }
+#endif
