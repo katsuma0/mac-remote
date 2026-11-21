@@ -14,7 +14,7 @@ jobs:
     runs-on: macos-latest
     timeout-minutes: 40
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Toolchain
         run: |
@@ -27,7 +27,9 @@ jobs:
 
       - name: Command-line Mac server
         working-directory: MacServer
-        run: swift build -c release
+        run: |
+          set -o pipefail
+          swift build -c release 2>&1 | tee ../spm-build.log
 
       - name: iPhone app
         run: |
@@ -37,7 +39,7 @@ jobs:
             -configuration Release \
             -sdk iphonesimulator \
             CODE_SIGNING_ALLOWED=NO \
-            | tee ios-build.log | grep -E "error:|warning: .*(deprecated|unreachable)|BUILD" || true
+            | tee ios-build.log | grep -E "error:|BUILD" || true
           grep -q "BUILD SUCCEEDED" ios-build.log
 
       - name: Mac app (App Store build, sandboxed)
@@ -50,9 +52,45 @@ jobs:
             | tee mac-build.log | grep -E "error:|BUILD" || true
           grep -q "BUILD SUCCEEDED" mac-build.log
 
+      - name: Check the apps are App Store-ready
+        run: |
+          set -euo pipefail
+          IOS=build/Release-iphonesimulator/Couchpad.app
+          MAC=build/Release/Couchpad.app
+
+          echo "== iPhone app"
+          plutil -extract CFBundleDisplayName raw "$IOS/Info.plist"
+          plutil -extract NSCameraUsageDescription raw "$IOS/Info.plist" >/dev/null
+          plutil -extract NSLocalNetworkUsageDescription raw "$IOS/Info.plist" >/dev/null
+          plutil -extract NSBonjourServices.0 raw "$IOS/Info.plist" | grep -qx "_couchpad._tcp"
+          plutil -extract CFBundleURLTypes.0.CFBundleURLSchemes.0 raw "$IOS/Info.plist" | grep -qx couchpad
+          plutil -extract CFBundleIcons.CFBundlePrimaryIcon.CFBundleIconName raw "$IOS/Info.plist" | grep -qx AppIcon
+          test -f "$IOS/Assets.car"
+          test -f "$IOS/PrivacyInfo.xcprivacy"
+          echo "ok"
+
+          echo "== Mac app"
+          plutil -extract CFBundleDisplayName raw "$MAC/Contents/Info.plist"
+          plutil -extract LSApplicationCategoryType raw "$MAC/Contents/Info.plist" | grep -q utilities
+          plutil -extract NSBonjourServices.0 raw "$MAC/Contents/Info.plist" | grep -qx "_couchpad._tcp"
+          plutil -extract CFBundleIconName raw "$MAC/Contents/Info.plist" | grep -qx AppIcon
+          test -f "$MAC/Contents/Resources/Assets.car"
+          test -f "$MAC/Contents/Resources/AppIcon.icns"
+          test -f "$MAC/Contents/Resources/PrivacyInfo.xcprivacy"
+          # The App Store build must not reference private frameworks.
+          if strings "$MAC/Contents/MacOS/Couchpad" | grep -q "DisplayServices\|PrivateFrameworks"; then
+            echo "Private framework reference found in the App Store build"; exit 1
+          fi
+          echo "ok"
+
+      - name: Compiler warnings in our code
+        if: always()
+        run: |
+          grep -h "warning:" spm-build.log ios-build.log mac-build.log 2>/dev/null | grep -E "/(iOS|MacServer)/" | sort -u || echo "none"
+
       - name: Upload build logs
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: build-logs
           path: "*.log"
