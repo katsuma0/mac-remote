@@ -8,6 +8,8 @@
 	</array>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Couchpad uses your local network to find your Mac and control it.</string>
+	<key>NSFaceIDUsageDescription</key>
+	<string>Couchpad can use Face ID so that only you can open it and control your Mac.</string>
 	<key>NSCameraUsageDescription</key>
 	<string>Couchpad uses the camera to scan the pairing code shown on your Mac.</string>
 	<key>CFBundleURLTypes</key>

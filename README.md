@@ -8,7 +8,10 @@ Use your iPhone as a trackpad, keyboard and media remote for your Mac – from b
 - **Keyboard:** type on the iPhone and it appears on the Mac; Esc, Tab, arrows and common shortcuts
 - **Media:** volume slider and mute, brightness, play/pause/next/previous, lock or sleep the display
 - **Screen Mirroring:** start or stop AirPlay mirroring to your TV from the iPhone
-- **Secure:** only iPhones you pair can control the Mac, and everything is end-to-end encrypted
+- **Presentation mode:** big Next/Back buttons, start slideshow, black screen and a timer (Keynote, PowerPoint, Google Slides)
+- **Apps:** see the Mac's open apps with their icons; switch to, open or quit them
+- **Clipboard:** send text to the Mac's clipboard, or get the Mac's clipboard on the iPhone
+- **Secure:** only iPhones you pair can control the Mac, everything is end-to-end encrypted, plus optional Face ID lock and per-connection approval
 
 | Part | Folder | |
 |---|---|---|
@@ -46,7 +49,9 @@ Or run it in Terminal: `swift run -c release` (add `--pair` to pair, `--help` fo
 
 ## Publishing on the App Store
 
-Everything technical is set up: app icons (including iOS dark and tinted variants), privacy manifests, sandbox entitlements, Info.plist permission texts, and a Mac build without private frameworks.
+Everything technical is set up: app icons (including iOS dark and tinted variants), privacy manifests, sandbox entitlements, Info.plist permission texts, a Mac build without private frameworks, and a support + privacy website in `docs/` for GitHub Pages.
+
+A VPN is intentionally not included; see [`AppStore/VPN-PLAN.md`](AppStore/VPN-PLAN.md) for what it would take.
 
 **Follow [`AppStore/SUBMITTING.md`](AppStore/SUBMITTING.md)** – it walks through the Apple Developer account, App Store Connect, uploading and review. Listing text is in [`AppStore/Metadata.md`](AppStore/Metadata.md), review notes in [`AppStore/ReviewNotes.md`](AppStore/ReviewNotes.md) and the privacy policy in [`AppStore/PRIVACY.md`](AppStore/PRIVACY.md).
 
@@ -61,6 +66,8 @@ The old version accepted a 6-digit PIN sent in plain text. Couchpad replaces it 
 - **Every connection.** A fresh X25519 exchange; both sides prove they hold the pairing key. A stranger on your Wi-Fi can't control the Mac, and a fake "Mac" can't trick your iPhone into sending it what you type.
 - **Every message.** Session keys are derived per connection (forward secrecy). All commands – over TCP and the fast UDP channel for pointer movement – are sealed with ChaChaPoly and numbered, so they can't be read, changed, replayed or reordered.
 - **Brute-force protection.** Repeated failures lock out new connections for a minute.
+- **Locked Mac stays locked.** While the Mac's screen is locked it ignores the trackpad, keyboard, apps and clipboard from phones (volume and playback still work), so nobody can type at the login window.
+- **Optional extras.** *Ask before each connection* (Mac shows Allow / Don't Allow), *QR-only pairing* (turn off the 6-digit code), and *Require Face ID* on the iPhone.
 - **Nothing leaves your network.** No accounts, servers, analytics or tracking.
 
 Forget a pairing on the iPhone in **Settings → Paired Macs** (swipe left) or on the Mac in **Paired iPhones** (trash icon).
@@ -84,7 +91,8 @@ The iPhone finds the Mac with Bonjour (`_couchpad._tcp`) on the same Wi-Fi. Poin
 ```
 Couchpad.xcodeproj           iPhone app + Mac App Store app
 Config/Shared.xcconfig       team id, bundle id prefix, version (edit this)
-AppStore/                    submission guide, listing text, review notes, privacy policy
+AppStore/                    submission guide, listing text, review notes, privacy policy, VPN plan
+docs/                        website for GitHub Pages: home, support, privacy
 Design/Icon/                 icon sources (SVG) – render with `node render.js in.svg out.png 1024`
 iOS/
   Info.plist                 permission texts, Bonjour service, couchpad:// link

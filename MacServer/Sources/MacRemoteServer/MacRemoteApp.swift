@@ -51,6 +51,7 @@ struct MainWindow: View {
     @EnvironmentObject var model: AppModel
 
     var body: some View {
+        ScrollView {
         VStack(spacing: 16) {
             header
             statusRow
@@ -67,6 +68,20 @@ struct MainWindow: View {
             }
 
             VStack(alignment: .leading, spacing: 6) {
+                Text("Security")
+                    .font(.headline)
+                Toggle("Ask before each connection", isOn: $model.askBeforeConnecting)
+                    .help("Show Allow / Don't Allow every time a paired iPhone connects.")
+                Toggle("Ignore iPhones while this Mac is locked", isOn: $model.ignoreWhileLocked)
+                    .help("Nobody can type at the login screen from a phone. Volume and playback still work.")
+                Toggle("Allow pairing with the 6-digit code", isOn: $model.allowCodePairing)
+                    .help("Turn off to allow pairing only by scanning the QR code, the most secure way.")
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(12)
+            .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 10))
+
+            VStack(alignment: .leading, spacing: 6) {
                 Toggle("Turn on automatically when Couchpad opens", isOn: $model.startAutomatically)
                 Toggle("Open Couchpad when I log in", isOn: $model.openAtLogin)
                 Toggle("Allow direct connection without Wi-Fi (can add lag)", isOn: $model.peerToPeer)
@@ -80,7 +95,9 @@ struct MainWindow: View {
                 .foregroundStyle(.secondary)
         }
         .padding(24)
-        .frame(width: 460)
+        }
+        .frame(width: 480)
+        .frame(minHeight: 420, idealHeight: 720)
         .sheet(isPresented: $model.showingPairing, onDismiss: { model.endPairing() }) {
             PairingSheet()
                 .environmentObject(model)
@@ -281,6 +298,7 @@ struct PairingSheet: View {
                         .background(Color.white, in: RoundedRectangle(cornerRadius: 12))
                 }
 
+                if model.allowCodePairing {
                 VStack(spacing: 4) {
                     Text("Or enter this code on your iPhone")
                         .font(.caption)
@@ -288,6 +306,7 @@ struct PairingSheet: View {
                     Text("\(pairing.code.prefix(3)) \(pairing.code.suffix(3))")
                         .font(.system(size: 36, weight: .bold, design: .monospaced))
                         .textSelection(.enabled)
+                }
                 }
 
                 TimelineView(.periodic(from: .now, by: 1)) { context in

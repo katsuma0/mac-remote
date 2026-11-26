@@ -42,6 +42,14 @@ final class RemoteConnection: ObservableObject {
     @Published private(set) var macMuted = false
     @Published private(set) var macBrightness: Double = 50
 
+    @Published private(set) var macApps: [AppInfo] = []
+    @Published private(set) var appsLoading = false
+    /// Text received from the Mac's clipboard (nil until asked).
+    @Published private(set) var macClipboard: String?
+    /// Shown briefly when the Mac ignores input because it's locked.
+    @Published private(set) var lockedNotice: String?
+    private var lockedNoticeWork: DispatchWorkItem?
+
     @Published private(set) var mirrorScreens: [MirrorScreen] = []
     @Published private(set) var mirrorLoading = false
     @Published private(set) var mirrorError: String?
@@ -540,6 +548,17 @@ final class RemoteConnection: ObservableObject {
             if let s = message.s { macMuted = (s == "muted") }
         case "brightness":
             if let v = message.v { macBrightness = v }
+        case "apps":
+            appsLoading = false
+            macApps = message.apps ?? []
+        case "clipboard":
+            macClipboard = message.s ?? ""
+        case "locked":
+            lockedNotice = message.e ?? "Your Mac is locked."
+            lockedNoticeWork?.cancel()
+            let work = DispatchWorkItem { [weak self] in self?.lockedNotice = nil }
+            lockedNoticeWork = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 4, execute: work)
         case "mirroring":
             mirrorTimeout?.cancel()
             mirrorLoading = false
@@ -599,6 +618,26 @@ final class RemoteConnection: ObservableObject {
     func setBrightness(_ value: Double) {
         macBrightness = value
         send(RemoteCommand(t: "brightness", v: value))
+    }
+
+    // MARK: Apps & clipboard
+
+    func refreshApps() {
+        guard isEstablished else { return }
+        appsLoading = true
+        send(RemoteCommand(t: "apps"))
+    }
+
+    func openApp(_ bundleId: String) { send(RemoteCommand(t: "app_open", s: bundleId)) }
+    func quitApp(_ bundleId: String) { send(RemoteCommand(t: "app_quit", s: bundleId)) }
+
+    func sendClipboard(_ text: String) {
+        send(RemoteCommand(t: "clip_set", s: String(text.prefix(Capability.clipboardLimit))))
+    }
+
+    func requestClipboard() {
+        macClipboard = nil
+        send(RemoteCommand(t: "clip_get"))
     }
 
     // MARK: Screen mirroring (AirPlay, through the Mac's menu bar)

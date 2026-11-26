@@ -34,6 +34,17 @@ final class RemoteServer {
     private(set) var isListening = false
     private(set) var pairingWindow: PairingWindow?
 
+    // MARK: Security options (set by the app)
+
+    /// Ignore pointer, keyboard, apps and clipboard commands while the Mac's screen is locked, so a
+    /// phone can't type at the login window. Media keys and volume still work.
+    var ignoreWhileLocked = true
+    /// Allow pairing with the 6-digit code. With it off, only the QR code (256-bit secret) pairs.
+    var allowCodePairing = true
+    /// If set, every connection of a paired iPhone must be approved on the Mac. Called with the
+    /// iPhone's name; call the completion with true to allow it.
+    var approvalHandler: ((String, @escaping (Bool) -> Void) -> Void)?
+
     private var stopped = false
     private var listener: NWListener?
     private var udpListener: NWListener?
@@ -47,6 +58,7 @@ final class RemoteServer {
     init(peerToPeer: Bool, pairings: PairingStore = .shared) {
         self.peerToPeer = peerToPeer
         self.pairings = pairings
+        _ = ScreenLockMonitor.shared   // start watching for screen lock right away
     }
 
     var connectedPhones: [String] {
@@ -58,7 +70,7 @@ final class RemoteServer {
     }
 
     var capabilities: [String] {
-        var list = [Capability.screenMirroring]
+        var list = [Capability.screenMirroring, Capability.apps, Capability.clipboard]
         if Brightness.isSupported { list.append(Capability.brightnessSlider) }
         if SystemActions.canSleepDisplay { list.append(Capability.sleepDisplay) }
         return list
@@ -362,7 +374,16 @@ final class RemoteServer {
 
     // MARK: Commands
 
+    /// Commands that keep working while the Mac is locked (they can't type or click anything).
+    private static let allowedWhileLocked: Set<String> = ["media", "volume", "brightness", "ping", "system"]
+
     fileprivate func perform(_ cmd: RemoteCommand, from session: ClientSession) {
+        if ignoreWhileLocked, ScreenLockMonitor.shared.isLocked, !Self.allowedWhileLocked.contains(cmd.t) {
+            if cmd.t != "move" && cmd.t != "scroll" {
+                session.send(RemoteCommand(t: "locked", e: "Your Mac is locked. Unlock it on the Mac to use the trackpad and keyboard."))
+            }
+            return
+        }
         switch cmd.t {
         case "move":
             input.move(dx: cmd.dx ?? 0, dy: cmd.dy ?? 0)
@@ -413,10 +434,29 @@ final class RemoteServer {
             }
         case "system":
             if cmd.s == "sleepdisplay" { SystemActions.sleepDisplay() }
+        case "apps":
+            session.send(RemoteCommand(t: "apps", apps: MacApps.list()))
+        case "app_open":
+            if let id = cmd.s { MacApps.open(id) }
+            refreshApps(for: session)
+        case "app_quit":
+            if let id = cmd.s { MacApps.quit(id) }
+            refreshApps(for: session)
+        case "clip_set":
+            MacClipboard.set(cmd.s ?? "")
+            Log.write("📋 Clipboard received from “\(session.phoneName)”.")
+        case "clip_get":
+            session.send(RemoteCommand(t: "clipboard", s: MacClipboard.text))
         case "ping":
             session.send(RemoteCommand(t: "pong"))
         default:
             Log.write("Unknown command: \(cmd.t)")
+        }
+    }
+
+    private func refreshApps(for session: ClientSession) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak session] in
+            session?.send(RemoteCommand(t: "apps", apps: MacApps.list()))
         }
     }
 
@@ -437,6 +477,7 @@ final class RemoteServer {
         private enum Phase {
             case awaitingHello
             case handshaking(MacHandshake)
+            case awaitingApproval
             case established(SecureChannel)
         }
 
@@ -556,7 +597,10 @@ final class RemoteServer {
                     }
                 case "pair":
                     do {
-                        let result = try handshake.receive(pair: message, secret: { server.pairingWindow?.secret(for: $0) })
+                        let result = try handshake.receive(pair: message, secret: { method in
+                            if method == .code && !server.allowCodePairing { return nil }
+                            return server.pairingWindow?.secret(for: method)
+                        })
                         guard let phoneId else { return close(reason: "no phone id") }
                         server.pairings.add(phoneId: phoneId, name: phoneName, key: result.longTermKey)
                         sendPlain(result.reply)
@@ -574,6 +618,10 @@ final class RemoteServer {
                     close(reason: "unexpected \(message.t)")
                 }
 
+            case .awaitingApproval:
+                // The iPhone sends nothing until it gets auth_ok.
+                break
+
             case .established(let channel):
                 guard let sealed = Data(base64Encoded: line),
                       let plaintext = try? channel.open(sealed),
@@ -586,6 +634,28 @@ final class RemoteServer {
         }
 
         private func establish(_ keys: SessionKeys) {
+            guard let server else { return }
+            if let ask = server.approvalHandler {
+                phase = .awaitingApproval
+                Log.write("❓ Waiting for approval on the Mac for “\(phoneName)”…")
+                var answered = false
+                ask(phoneName) { [weak self] allowed in
+                    guard let self, !answered, !self.closed else { return }
+                    answered = true
+                    if allowed {
+                        self.finishEstablishing(keys)
+                    } else {
+                        Log.write("🚫 Declined “\(self.phoneName)”.")
+                        self.sendPlain(HandshakeMessage(t: "error", e: "The Mac declined the connection."))
+                        self.closeSoon(reason: "declined on the Mac")
+                    }
+                }
+                return
+            }
+            finishEstablishing(keys)
+        }
+
+        private func finishEstablishing(_ keys: SessionKeys) {
             guard let server else { return }
             phase = .established(SecureChannel(sendKey: keys.tcpSend, receiveKey: keys.tcpReceive, ordering: .strict))
             udpChannel = SecureChannel(sendKey: keys.udpSend, receiveKey: keys.udpReceive, ordering: .increasing)

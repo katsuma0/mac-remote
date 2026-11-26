@@ -47,20 +47,22 @@ Go to <https://appstoreconnect.apple.com> → **Apps** → **+** → **New App**
 
 (If a name is taken, try a variation – the name under the icon stays "Couchpad" either way.)
 
-## 4. Publish the privacy policy
+## 4. Publish the support and privacy pages
 
-App Store Connect requires a public **Privacy Policy URL**. The policy is ready in `AppStore/PRIVACY.md`. Easiest ways to get a link:
+App Store Connect requires a public **Privacy Policy URL** and **Support URL**. A small website with both is ready in the `docs/` folder.
 
-- **GitHub Pages:** repository → Settings → Pages → Source: *Deploy from a branch*, `main`, `/ (root)`. The policy is then at
-  `https://<your-github-name>.github.io/<repo-name>/AppStore/PRIVACY`.
-  (Pages on a private repository needs a paid GitHub plan – otherwise use the next option.)
-- **Any other site / Notion / Google Doc** set to "anyone with the link can view": paste the text there.
+- **GitHub Pages:** repository → **Settings → Pages** → Source: *Deploy from a branch* → Branch `main`, folder **`/docs`** → Save. After a minute the site is live:
+  - `https://<your-github-name>.github.io/<repo-name>/` – home page
+  - `https://<your-github-name>.github.io/<repo-name>/support` – Support URL
+  - `https://<your-github-name>.github.io/<repo-name>/privacy` – Privacy Policy URL
+
+  (GitHub Pages on a **private** repository needs a paid GitHub plan. Either make the repository public, or paste `AppStore/PRIVACY.md` and `docs/support.md` into any public page, e.g. Notion or a Google Doc shared as "anyone with the link".)
 
 ## 5. Fill in the App Store pages
 
 For each app, in App Store Connect:
 
-1. **App Information:** Category = Utilities. Content Rights: "No, it does not contain third-party content".
+1. **App Information:** Category = Utilities. Content Rights: "No, it does not contain third-party content". Add the Support URL from step 4.
 2. **Pricing and Availability:** Price = Free (USD 0). Choose countries.
 3. **App Privacy:** Privacy Policy URL from step 4. Then **Get Started → "No, we do not collect data from this app"** → Publish. (True: Couchpad collects nothing.)
 4. **The version page (1.0):**

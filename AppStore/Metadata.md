@@ -36,19 +36,30 @@ MEDIA & SCREEN
 • Screen brightness and lock screen
 • Start or stop AirPlay Screen Mirroring to your TV, right from your iPhone
 
+PRESENTATIONS
+• Big Next and Back buttons for Keynote, PowerPoint and Google Slides
+• Start the slideshow, black out the screen, keep time with a built-in timer
+
+APPS & CLIPBOARD
+• See the apps open on your Mac, switch to one or quit it, or open a favorite
+• Send text from your iPhone to the Mac's clipboard, or grab the Mac's clipboard
+
 PRIVATE AND SECURE
-• Pair once by scanning a code on your Mac – only iPhones you pair can control it
+• Pair once by scanning a code on your Mac – nobody else on your Wi-Fi can control it
 • Everything you send is end-to-end encrypted
+• Optional Face ID lock, and optional approval on the Mac for every connection
+• Your Mac ignores the phone while it's locked
 • Works entirely on your own Wi-Fi: no accounts, no internet, no tracking
 
 REQUIRES the free Couchpad app on your Mac (macOS 13 or later), available on the Mac App Store.
 ```
 
 **Keywords** [100]:
-`remote,trackpad,mouse,keyboard,computer,control,touchpad,wireless,media,volume,airplay,tv,couch`
+`remote,trackpad,mouse,keyboard,presentation,slides,clipboard,touchpad,wireless,volume,airplay,tv`
 
-**Support URL:** your GitHub repository page (or any page with a contact email)
-**Privacy Policy URL:** a public link to `AppStore/PRIVACY.md` (see SUBMITTING.md)
+**Support URL:** `https://<your-github-name>.github.io/<repo>/support` (see SUBMITTING.md step 4)
+**Privacy Policy URL:** `https://<your-github-name>.github.io/<repo>/privacy`
+**Marketing URL (optional):** `https://<your-github-name>.github.io/<repo>/`
 
 ---
 
@@ -65,6 +76,8 @@ Couchpad Receiver lets the free Couchpad iPhone app control this Mac: trackpad, 
 
 • Click "Pair iPhone…" and scan the code with your iPhone – that's it
 • Only iPhones you pair can connect, and everything is end-to-end encrypted
+• Optional: approve every connection, ignore phones while the Mac is locked, QR-only pairing
+• Works with the iPhone app's trackpad, keyboard, media controls, presentation mode, app switcher and clipboard sharing
 • Runs quietly in the menu bar; can open automatically when you log in
 • Works on your own Wi-Fi with no accounts and no internet connection
 
