@@ -11,6 +11,9 @@ How to test:
 1. On a Mac (macOS 13+), install and open Couchpad Receiver. Click "Turn On", then "Pair iPhone…". Allow Accessibility when asked.
 2. On the iPhone (same Wi-Fi), open Couchpad and tap "Scan Pairing Code", then scan the QR code on the Mac (or tap the Mac in the list and type the 6-digit code).
 3. Move a finger on the trackpad area to move the Mac's pointer; tap to click; use the keyboard button to type; use the volume slider.
+4. The grid button (top right) opens Tools: Presentation mode, Apps (switch/open/quit Mac apps) and Clipboard sharing.
+
+Face ID is optional (Settings → Require Face ID) and only locks the app itself.
 
 No account or login is needed. The app only communicates on the local network with the paired Mac; traffic is end-to-end encrypted (CryptoKit: X25519, HKDF, HMAC-SHA256, ChaChaPoly). The camera is only used to scan the pairing QR code.
 ```

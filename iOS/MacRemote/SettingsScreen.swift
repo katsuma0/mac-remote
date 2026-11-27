@@ -7,6 +7,7 @@ struct SettingsScreen: View {
     @AppStorage("invertScroll") private var invertScroll = false
     @AppStorage("haptics") private var haptics = true
     @AppStorage("deviceName") private var deviceName = ""
+    @AppStorage("requireFaceID") private var requireFaceID = false
     @State private var pairedMacs = PhonePairings.all
     @Environment(\.dismiss) private var dismiss
 
@@ -61,6 +62,7 @@ struct SettingsScreen: View {
                 }
 
                 Section("Security") {
+                    Toggle("Require \(AppLock.biometryName) to open", isOn: $requireFaceID)
                     Label("Only iPhones you pair on the Mac can control it.", systemImage: "lock.shield")
                     Label("Everything you send is end-to-end encrypted.", systemImage: "lock")
                     Label("No accounts, no tracking. Nothing leaves your network.", systemImage: "hand.raised")

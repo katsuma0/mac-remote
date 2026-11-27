@@ -61,6 +61,7 @@ jobs:
           echo "== iPhone app"
           plutil -extract CFBundleDisplayName raw "$IOS/Info.plist"
           plutil -extract NSCameraUsageDescription raw "$IOS/Info.plist" >/dev/null
+          plutil -extract NSFaceIDUsageDescription raw "$IOS/Info.plist" >/dev/null
           plutil -extract NSLocalNetworkUsageDescription raw "$IOS/Info.plist" >/dev/null
           plutil -extract NSBonjourServices.0 raw "$IOS/Info.plist" | grep -qx "_couchpad._tcp"
           plutil -extract CFBundleURLTypes.0.CFBundleURLSchemes.0 raw "$IOS/Info.plist" | grep -qx couchpad

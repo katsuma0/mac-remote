@@ -12,6 +12,7 @@ struct RemoteScreen: View {
     @State private var typing = false
     @State private var showSettings = false
     @State private var showMirroring = false
+    @State private var showTools = false
     @State private var showMoreKeys = false
 
     var body: some View {
@@ -44,6 +45,21 @@ struct RemoteScreen: View {
         .sheet(isPresented: $showSettings) {
             SettingsScreen().environmentObject(remote)
         }
+        .sheet(isPresented: $showTools) {
+            ToolsSheet().environmentObject(remote)
+        }
+        .overlay(alignment: .top) {
+            if let notice = remote.lockedNotice {
+                Label(notice, systemImage: "lock.fill")
+                    .font(.footnote.weight(.semibold))
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .background(.thinMaterial, in: Capsule())
+                    .padding(.top, 50)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
+        }
+        .animation(.easeInOut(duration: 0.25), value: remote.lockedNotice)
         .sheet(isPresented: $showMirroring) {
             MirroringSheet().environmentObject(remote)
         }
@@ -63,6 +79,7 @@ struct RemoteScreen: View {
                 .font(.subheadline.weight(.semibold))
                 .lineLimit(1)
             Spacer()
+            HeaderButton(icon: "square.grid.2x2", label: "Tools") { showTools = true }
             HeaderButton(icon: "airplayvideo", label: "Screen Mirroring") { showMirroring = true }
             HeaderButton(icon: "gearshape", label: "Settings") { showSettings = true }
         }

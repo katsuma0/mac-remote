@@ -38,6 +38,32 @@ final class AppModel: ObservableObject {
         }
     }
 
+    // MARK: Security options
+
+    /// Show an Allow / Don't Allow prompt every time a paired iPhone connects.
+    @Published var askBeforeConnecting = UserDefaults.standard.bool(forKey: "askBeforeConnecting") {
+        didSet {
+            UserDefaults.standard.set(askBeforeConnecting, forKey: "askBeforeConnecting")
+            applySecurityOptions()
+        }
+    }
+
+    /// Ignore the trackpad and keyboard while this Mac is locked.
+    @Published var ignoreWhileLocked = UserDefaults.standard.object(forKey: "ignoreWhileLocked") as? Bool ?? true {
+        didSet {
+            UserDefaults.standard.set(ignoreWhileLocked, forKey: "ignoreWhileLocked")
+            applySecurityOptions()
+        }
+    }
+
+    /// Allow pairing by typing the 6-digit code (otherwise only by scanning the QR code).
+    @Published var allowCodePairing = UserDefaults.standard.object(forKey: "allowCodePairing") as? Bool ?? true {
+        didSet {
+            UserDefaults.standard.set(allowCodePairing, forKey: "allowCodePairing")
+            applySecurityOptions()
+        }
+    }
+
     @Published var startAutomatically = UserDefaults.standard.object(forKey: "startAutomatically") as? Bool ?? true {
         didSet { UserDefaults.standard.set(startAutomatically, forKey: "startAutomatically") }
     }
@@ -115,6 +141,7 @@ final class AppModel: ObservableObject {
             NSApp.requestUserAttention(.informationalRequest)
         }
         server = newServer
+        applySecurityOptions()
         newServer.start()
         newServer.startUDP()
         isRunning = true
@@ -158,6 +185,36 @@ final class AppModel: ObservableObject {
             if pairing != info { pairing = info }
         } else if pairing != nil {
             pairing = nil
+        }
+    }
+
+    private func applySecurityOptions() {
+        guard let server else { return }
+        server.ignoreWhileLocked = ignoreWhileLocked
+        server.allowCodePairing = allowCodePairing
+        server.approvalHandler = askBeforeConnecting ? { name, completion in
+            AppModel.askToAllow(name, completion: completion)
+        } : nil
+    }
+
+    /// Allow / Don't Allow prompt; gives up (doesn't allow) after 30 seconds.
+    private static func askToAllow(_ phoneName: String, completion: @escaping (Bool) -> Void) {
+        DispatchQueue.main.async {
+            NSApp.activate(ignoringOtherApps: true)
+            let alert = NSAlert()
+            alert.messageText = "Allow “\(phoneName)” to control this Mac?"
+            alert.informativeText = "This iPhone is paired with Couchpad and wants to connect. To stop being asked, turn off “Ask before each connection” in Couchpad."
+            alert.addButton(withTitle: "Allow")
+            alert.addButton(withTitle: "Don't Allow")
+            var timedOut = false
+            let timeout = DispatchWorkItem {
+                timedOut = true
+                NSApp.abortModal()
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 30, execute: timeout)
+            let response = alert.runModal()
+            timeout.cancel()
+            completion(!timedOut && response == .alertFirstButtonReturn)
         }
     }
 

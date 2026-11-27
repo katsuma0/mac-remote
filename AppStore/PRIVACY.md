@@ -11,7 +11,8 @@ Couchpad is an iPhone app and a Mac app that let you control your own Mac from y
 ## How it works
 
 - The iPhone app talks **directly to your Mac over your local network** (Wi-Fi, or an optional direct Wi-Fi link). It never connects to the internet or to any server.
-- Everything sent between your iPhone and your Mac (pointer movement, clicks, what you type, volume and other commands) is **end-to-end encrypted** with keys that only your two devices have.
+- Everything sent between your iPhone and your Mac (pointer movement, clicks, what you type, clipboard text, the list of open apps, volume and other commands) is **end-to-end encrypted** with keys that only your two devices have.
+- **Clipboard sharing** happens only when you tap a button for it, and the text goes only to your own paired device. It isn't stored by Couchpad.
 - Only iPhones that you pair yourself, by scanning a code shown on your Mac's screen, can connect to your Mac.
 
 ## Data stored on your devices
@@ -25,7 +26,9 @@ This data never leaves your devices. Deleting the app deletes it.
 
 - **Local Network (iPhone and Mac):** to find your Mac and connect to it.
 - **Camera (iPhone, optional):** only to scan the pairing code on your Mac. Images are processed on the device and never stored or sent anywhere.
+- **Face ID / Touch ID (iPhone, optional):** if you turn on "Require Face ID", iOS checks it on the device; Couchpad never sees your face or fingerprint data.
 - **Accessibility (Mac):** to move the pointer, click, type, and open the Screen Mirroring menu when you ask from your iPhone.
+- **Running apps (Mac):** when you open the Apps screen on your iPhone, the Mac sends the names and icons of its open apps to your iPhone so you can switch between them.
 
 ## Children
 

@@ -196,6 +196,13 @@ final class SecureSessionTests: XCTestCase {
         XCTAssertNil(PairingLink(url: URL(string: "couchpad://pair?v=1&id=x")!))
     }
 
+    func testAppListRoundTrip() throws {
+        let message = RemoteCommand(t: "apps", apps: [AppInfo(id: "com.apple.Safari", name: "Safari", running: true, active: true),
+                                                      AppInfo(id: "com.apple.Music", name: "Music", running: false)])
+        let decoded = try JSONDecoder().decode(RemoteCommand.self, from: JSONEncoder().encode(message))
+        XCTAssertEqual(decoded, message)
+    }
+
     func testRemoteCommandOmitsEmptyFields() throws {
         let json = String(decoding: try JSONEncoder().encode(RemoteCommand(t: "click", b: "left")), as: UTF8.self)
         XCTAssertFalse(json.contains("dx"))
